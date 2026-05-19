@@ -507,12 +507,31 @@
         Body.setStatic(currentAnimal, false);
         const check = setInterval(() => {
             if (!currentAnimal) { clearInterval(check); return; }
-            if (currentAnimal.position.y > DEATH_Y) { 
+            
+            let anyFell = false;
+            const bodies = Composite.allBodies(world);
+            for(let i=0; i<bodies.length; i++) {
+                if (bodies[i].label === 'animal' && bodies[i].position.y > DEATH_Y) {
+                    anyFell = true; break;
+                }
+            }
+
+            if (anyFell) { 
                 clearInterval(check); sendMove(true); 
             } else if (currentAnimal.speed < 0.02 && currentAnimal.position.y > currentSpawnY + 50) {
                 // スピード0.02以下（ほぼ完全静止）まで待機を厳格化
                 setTimeout(() => { 
-                    if (currentAnimal && currentAnimal.speed < 0.02) { 
+                    let fellAfterWait = false;
+                    const bds = Composite.allBodies(world);
+                    for(let i=0; i<bds.length; i++) {
+                        if (bds[i].label === 'animal' && bds[i].position.y > DEATH_Y) {
+                            fellAfterWait = true; break;
+                        }
+                    }
+
+                    if (fellAfterWait) {
+                        clearInterval(check); sendMove(true);
+                    } else if (currentAnimal && currentAnimal.speed < 0.02) { 
                         clearInterval(check); sendMove(false); 
                     } 
                 }, 1500); // 完全に止まったか1.5秒待ってから手番を終了する（滑り落ち防止）
@@ -525,6 +544,12 @@
     document.getElementById('clear-stage-btn').onclick = () => { clearPhysics(); };
     document.getElementById('cancel-editor-btn').onclick = showLobby;
     document.getElementById('refresh-btn').onclick = loadRooms;
+    document.getElementById('back-to-lobby-btn').onclick = showLobby;
+    showLobby();
+</script>
+</body>
+</html>
+n').onclick = loadRooms;
     document.getElementById('back-to-lobby-btn').onclick = showLobby;
     showLobby();
 </script>
