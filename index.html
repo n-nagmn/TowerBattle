@@ -1,0 +1,532 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>どうぶつタワーバトル Height & Sync Fix</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/poly-decomp.js/0.2.1/poly-decomp.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/matter-js/0.19.0/matter.min.js"></script>
+    <style>
+        * { box-sizing: border-box; }
+        body {
+            margin: 0; padding: 0; overflow: hidden; font-family: 'Arial', sans-serif;
+            background: linear-gradient(180deg, #87CEEB 0%, #E0F7FA 100%);
+            display: flex; flex-direction: column; align-items: center; justify-content: center;
+            height: 100vh; width: 100vw;
+        }
+        #lobby, #editor-ui, #game-ui, #result-overlay {
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+            display: flex; flex-direction: column; align-items: center; justify-content: center;
+            z-index: 10; pointer-events: none;
+        }
+        #lobby > *, #editor-ui > *, #game-ui > *, #result-overlay > * { pointer-events: auto; }
+        
+        .panel {
+            background: rgba(255, 255, 255, 0.95); padding: 20px; border-radius: 12px;
+            box-shadow: 0 10px 25px rgba(0,0,0,0.2); text-align: center; max-width: 95%; width: 450px;
+        }
+        .room-list {
+            margin: 15px 0; max-height: 50vh; overflow-y: auto;
+            display: grid; grid-template-columns: 1fr 1fr; gap: 10px; padding: 5px;
+        }
+        .room-card {
+            border: 2px solid #ccc; border-radius: 8px; padding: 10px; cursor: pointer;
+            transition: all 0.2s; background: white;
+        }
+        .room-card:hover { border-color: #4CAF50; transform: translateY(-2px); }
+        .room-thumbnail {
+            width: 100%; height: 60px; background: #f0f0f0; margin-bottom: 5px;
+            display: flex; align-items: center; justify-content: center; border-radius: 4px;
+            overflow: hidden; position: relative;
+        }
+        .thumb-platform { position: absolute; background: #556B2F; min-height: 2px; }
+
+        button {
+            padding: 10px 15px; font-size: 14px; cursor: pointer; border: none;
+            border-radius: 6px; background-color: #4CAF50; color: white; margin: 3px;
+            font-weight: bold;
+        }
+        button.secondary { background-color: #2196F3; }
+        button.danger { background-color: #f44336; }
+
+        #game-info {
+            position: absolute; top: 10px; width: 100%; text-align: center;
+            pointer-events: none;
+        }
+        #status-bar {
+            background: rgba(255, 255, 255, 0.9); padding: 8px 20px; border-radius: 20px;
+            display: inline-block; font-weight: bold; font-size: 16px; box-shadow: 0 3px 10px rgba(0,0,0,0.2);
+            pointer-events: auto; border: 2px solid #4CAF50;
+        }
+
+        #canvas-container {
+            position: absolute; top: 0; left: 0; width: 100vw; height: 100vh; z-index: 1;
+        }
+        canvas { width: 100%; height: 100%; }
+
+        #result-overlay {
+            display: none; z-index: 100; background: rgba(0,0,0,0.3);
+        }
+        .result-text {
+            font-size: 80px; font-weight: 900; color: white;
+            text-shadow: 0 0 20px rgba(0,0,0,0.5), 0 0 40px rgba(0,0,0,0.3);
+            animation: bounceIn 0.8s cubic-bezier(0.68, -0.55, 0.265, 1.55);
+        }
+        .result-win { color: #FFD700; }
+        .result-lose { color: #FF4B2B; }
+
+        @keyframes bounceIn {
+            0% { transform: scale(0.1); opacity: 0; }
+            60% { transform: scale(1.2); opacity: 1; }
+            100% { transform: scale(1); }
+        }
+
+        #controls-hint {
+            position: absolute; bottom: 20px; color: #555; font-size: 14px;
+            background: rgba(255,255,255,0.7); padding: 5px 15px; border-radius: 15px;
+            pointer-events: none;
+        }
+    </style>
+</head>
+<body>
+
+<div id="canvas-container"></div>
+
+<div id="lobby">
+    <div class="panel">
+        <h1>タワーバトル</h1>
+        <div id="room-container" class="room-list"></div>
+        <div style="margin-top: 10px;">
+            <button id="create-room-btn">ステージを作って対戦募集</button>
+            <button id="refresh-btn" class="secondary">更新</button>
+        </div>
+    </div>
+</div>
+
+<div id="editor-ui" style="display: none;">
+    <div class="panel">
+        <h2>ステージ作成</h2>
+        <p style="font-size: 14px; margin-bottom: 10px;">ドラッグで足場を配置 / 右クリックで削除</p>
+        <div class="btn-group">
+            <button id="save-stage-btn">募集開始</button>
+            <button id="clear-stage-btn" class="danger">すべてクリア</button>
+            <button id="cancel-editor-btn" class="secondary">戻る</button>
+        </div>
+    </div>
+</div>
+
+<div id="game-ui" style="display: none;">
+    <div id="game-info">
+        <div id="status-bar">接続中...</div>
+    </div>
+    <div id="controls-hint">左クリック：落とす / 右クリック：回転</div>
+</div>
+
+<div id="result-overlay">
+    <div class="result-text" id="result-message">WIN</div>
+    <button id="back-to-lobby-btn" style="margin-top: 30px; padding: 15px 30px; font-size: 20px;">ロビーへ戻る</button>
+</div>
+
+<script>
+    // --- Configuration ---
+    const LOGICAL_HEIGHT = 1200; 
+    const DEATH_Y = 800; // 落下判定ライン
+    const VIEW_Y_MIN = -700;
+    const VIEW_Y_MAX = 900;
+    
+    const ANIMAL_DATA = [
+        { name: 'Goat', img: 'https://img.icons8.com/color/144/goat.png', w: 80, h: 80, mass: 1, vertices: [{x:-30,y:-30},{x:30,y:-30},{x:35,y:30},{x:-35,y:30}] },
+        { name: 'Turtle', img: 'https://img.icons8.com/color/144/turtle.png', w: 90, h: 50, mass: 0.8, vertices: [{x:-45,y:10},{x:-30,y:-25},{x:30,y:-25},{x:45,y:10},{x:45,y:25},{x:-45,y:25}] },
+        { name: 'Tiger', img: 'https://img.icons8.com/color/144/tiger.png', w: 110, h: 70, mass: 1.2, vertices: [{x:-50,y:-30},{x:50,y:-30},{x:55,y:35},{x:-55,y:35}] },
+        { name: 'Zebra', img: 'https://img.icons8.com/color/144/zebra.png', w: 110, h: 90, mass: 1.1, vertices: [{x:-50,y:-40},{x:50,y:-40},{x:55,y:45},{x:-55,y:45}] },
+        { name: 'Camel', img: 'https://img.icons8.com/color/144/camel.png', w: 120, h: 100, mass: 1.3, vertices: [{x:-50,y:-45},{x:50,y:-45},{x:60,y:50},{x:-60,y:50}] },
+        { name: 'Panda', img: 'https://img.icons8.com/color/144/panda.png', w: 90, h: 90, mass: 1.5, vertices: [{x:-40,y:-40},{x:40,y:-40},{x:45,y:45},{x:-45,y:45}] },
+        { name: 'Rhino', img: 'https://img.icons8.com/color/144/rhinoceros.png', w: 120, h: 80, mass: 2.0, vertices: [{x:-60,y:-35},{x:50,y:-35},{x:60,y:40},{x:-60,y:40}] },
+        { name: 'Hippo', img: 'https://img.icons8.com/color/144/hippopotamus.png', w: 110, h: 80, mass: 1.8, vertices: [{x:-55,y:-40},{x:30,y:-40},{x:55,y:40},{x:-55,y:40}] },
+        { name: 'Elephant', img: 'https://img.icons8.com/color/144/elephant.png', w: 130, h: 100, mass: 2.5, vertices: [{x:-65,y:-50},{x:40,y:-50},{x:65,y:50},{x:-65,y:50}] },
+        { name: 'Giraffe', img: 'https://img.icons8.com/color/144/giraffe.png', w: 70, h: 160, mass: 1.2, vertices: [{x:-10,y:-80},{x:20,y:-80},{x:35,y:-60},{x:10,y:0},{x:30,y:60},{x:20,y:80},{x:-30,y:80}] },
+        { name: 'PolarBear', img: 'https://img.icons8.com/color/144/polar-bear.png', w: 120, h: 90, mass: 2.0, vertices: [{x:-50,y:-40},{x:50,y:-40},{x:60,y:45},{x:-60,y:45}] },
+        { name: 'Chick', img: 'https://img.icons8.com/color/144/chick.png', w: 30, h: 30, mass: 0.1, vertices: [{x:-15,y:-15},{x:15,y:-15},{x:15,y:15},{x:-15,y:15}], rare: true }
+    ];
+
+    // --- Matter.js Setup ---
+    const { Engine, Render, Runner, Bodies, Composite, Body, Common, Vertices, Bounds } = Matter;
+    if (window.decomp) Common.setDecomp(window.decomp);
+
+    const engine = Engine.create();
+    // 貫通防止と同期精度のためにイテレーションを大幅に向上
+    engine.positionIterations = 16; 
+    engine.velocityIterations = 16;
+    const world = engine.world;
+    
+    const render = Render.create({
+        element: document.getElementById('canvas-container'),
+        engine: engine,
+        options: { width: window.innerWidth, height: window.innerHeight, wireframes: false, background: 'transparent', hasBounds: true }
+    });
+
+    let logicalWidth = LOGICAL_HEIGHT * (window.innerWidth / window.innerHeight);
+    function resize() {
+        logicalWidth = LOGICAL_HEIGHT * (window.innerWidth / window.innerHeight);
+        render.canvas.width = window.innerWidth;
+        render.canvas.height = window.innerHeight;
+        Render.lookAt(render, { min: { x: -logicalWidth / 2, y: VIEW_Y_MIN }, max: { x: logicalWidth / 2, y: VIEW_Y_MAX } });
+    }
+    window.addEventListener('resize', resize);
+    resize();
+    Render.run(render);
+    Runner.run(Runner.create(), engine);
+
+    const ground = Bodies.rectangle(0, 5000, 20000, 200, { isStatic: true, label: 'ground' });
+    Composite.add(world, ground);
+
+    // --- State Variables ---
+    let preloadedImages = {};
+    ANIMAL_DATA.forEach(a => { const img = new Image(); img.crossOrigin = "anonymous"; img.src = a.img; preloadedImages[a.name] = img; });
+
+    let platforms = [];
+    let animals = [];
+    let myPlayerId = 'p_' + Math.random().toString(36).substr(2, 9);
+    let currentRoomId = null;
+    let myRole = null;
+    let gameState = 'lobby'; 
+    let currentAnimal = null;
+    let isDropping = false;
+    let lastMoveId = 0;
+    let pollingTimer = null;
+    let isProcessingOpponentMove = false;
+    let currentTurnRole = 'player_1';
+    let currentSpawnY = 0; 
+
+    // --- Core Functions ---
+
+    function getDynamicSpawnY() {
+        let minY = 500; // 初期基準を少し下げる
+        const bodies = Composite.allBodies(world);
+        for(let i=0; i<bodies.length; i++) {
+            if(bodies[i].label === 'animal' && bodies[i].position.y < minY) {
+                minY = bodies[i].position.y;
+            }
+        }
+        // 最も高い動物よりさらに 300px 上からスポーン（高さを少し高く）
+        return minY - 300;
+    }
+
+    function showLobby() {
+        gameState = 'lobby';
+        document.getElementById('lobby').style.display = 'flex';
+        document.getElementById('editor-ui').style.display = 'none';
+        document.getElementById('game-ui').style.display = 'none';
+        document.getElementById('result-overlay').style.display = 'none';
+        clearPhysics();
+        loadRooms();
+    }
+
+    function showEditor() {
+        gameState = 'editing';
+        document.getElementById('lobby').style.display = 'none';
+        document.getElementById('editor-ui').style.display = 'flex';
+        document.getElementById('game-ui').style.display = 'none';
+        clearPhysics();
+        createPlatform(0, 500, 300, 40);
+    }
+
+    function showGame(role, roomId) {
+        gameState = 'playing';
+        myRole = role;
+        currentRoomId = roomId;
+        document.getElementById('lobby').style.display = 'none';
+        document.getElementById('editor-ui').style.display = 'none';
+        document.getElementById('game-ui').style.display = 'flex';
+        startPolling();
+    }
+
+    function clearPhysics() {
+        Composite.clear(world, false);
+        Composite.add(world, ground);
+        platforms = [];
+        animals = [];
+        currentAnimal = null;
+        isDropping = false;
+        lastMoveId = 0;
+        isProcessingOpponentMove = false;
+        if (pollingTimer) clearInterval(pollingTimer);
+    }
+
+    async function loadRooms() {
+        try {
+            const res = await fetch('api.php?action=get_rooms');
+            const data = await res.json();
+            const container = document.getElementById('room-container');
+            container.innerHTML = '';
+            if (!data.rooms || data.rooms.length === 0) {
+                container.innerHTML = '<div style="grid-column:1/3;padding:20px;color:#666;">募集中の部屋はありません</div>';
+                return;
+            }
+            data.rooms.forEach(room => {
+                const card = document.createElement('div');
+                card.className = 'room-card';
+                let stageData = { platforms: [] };
+                try { stageData = JSON.parse(room.stage_data || '{"platforms":[]}'); } catch(e) {}
+                let thumbHtml = '<div class="room-thumbnail">';
+                stageData.platforms.forEach(p => {
+                    const tx = ((p.x + 500) / 1000) * 100;
+                    const ty = ((p.y + 500) / 1500) * 60;
+                    const tw = (p.w / 1000) * 100;
+                    const th = Math.max((p.h / 1500) * 60, 2);
+                    thumbHtml += `<div class="thumb-platform" style="left:${tx-tw/2}%; top:${ty-th/2}%; width:${tw}%; height:${th}px;"></div>`;
+                });
+                thumbHtml += '</div>';
+                card.innerHTML = `${thumbHtml}<div>Room #${room.room_id}</div>`;
+                card.onclick = () => joinRoom(room.room_id);
+                container.appendChild(card);
+            });
+        } catch(e) {}
+    }
+
+    async function createRoom() {
+        const res = await fetch('api.php?action=create_room', {
+            method: 'POST',
+            body: JSON.stringify({ host_id: myPlayerId, stage_data: platforms })
+        });
+        const data = await res.json();
+        showGame('player_1', data.room_id);
+    }
+
+    async function joinRoom(roomId) {
+        await fetch('api.php?action=join_room', { method: 'POST', body: JSON.stringify({ room_id: roomId, player_id: myPlayerId }) });
+        showGame('player_2', roomId);
+    }
+
+    function createPlatform(x, y, w, h) {
+        const p = Bodies.rectangle(x, y, w, h, { isStatic: true, render: { fillStyle: '#556B2F' }, label: 'platform' });
+        platforms.push({ x, y, w, h });
+        Composite.add(world, p);
+    }
+
+    function spawnAnimal(type, x, y, angle, isStatic) {
+        const data = ANIMAL_DATA[type];
+        if (!data) return null;
+        const img = preloadedImages[data.name];
+        const hasImg = img && img.complete && img.naturalWidth !== 0;
+
+        const animal = Bodies.fromVertices(x, y, [data.vertices], {
+            isStatic: isStatic, friction: 0.5, restitution: 0.1, angle: angle,
+            render: {
+                sprite: hasImg ? { texture: data.img, xScale: data.w/144, yScale: data.h/144 } : null,
+                fillStyle: hasImg ? null : '#ff00ff'
+            },
+            label: 'animal', animalType: type,
+            isSensor: isStatic 
+        });
+        if (animal) Body.setMass(animal, data.mass);
+        Composite.add(world, animal);
+        return animal;
+    }
+
+    function syncStageState(stageData) {
+        // 完全に同期させるため、既存の動物を削除して完全再現する
+        const bodies = Composite.allBodies(world);
+        bodies.forEach(b => {
+            if (b.label === 'animal' && b !== currentAnimal) {
+                Composite.remove(world, b);
+            }
+        });
+        
+        if(stageData && stageData.animals) {
+            stageData.animals.forEach(a => {
+                const newAnimal = spawnAnimal(a.type, a.x, a.y, a.angle, false);
+                if (newAnimal) {
+                    // 位置と角度を上書きし、速度を完全に0にして微小爆発を防ぐ
+                    Body.setPosition(newAnimal, { x: a.x, y: a.y });
+                    Body.setAngle(newAnimal, a.angle);
+                    Body.setVelocity(newAnimal, {x:0, y:0});
+                    Body.setAngularVelocity(newAnimal, 0);
+                }
+            });
+        }
+    }
+
+    function startPolling() { fetchState(); pollingTimer = setInterval(fetchState, 1500); }
+
+    async function fetchState() {
+        if (!currentRoomId || gameState !== 'playing' || isProcessingOpponentMove) return;
+        try {
+            const res = await fetch(`api.php?action=get_state&room_id=${currentRoomId}`);
+            const data = await res.json();
+            
+            // 初回足場ロード
+            if (platforms.length === 0 && data.stage_data && data.stage_data.platforms) {
+                data.stage_data.platforms.forEach(p => createPlatform(p.x, p.y, p.w, p.h));
+                syncStageState(data.stage_data);
+            }
+            
+            const turnCount = data.moves.length;
+            currentTurnRole = (turnCount % 2 === 0) ? 'player_1' : 'player_2';
+            const isMyTurn = (myRole === currentTurnRole);
+            
+            const bar = document.getElementById('status-bar');
+            bar.textContent = isMyTurn ? 'あなたの番です' : '相手の番です';
+
+            if (isMyTurn && !currentAnimal && !isDropping) {
+                let type = Math.floor(Math.random() * (ANIMAL_DATA.length - 1));
+                if (Math.random() < 0.05) type = ANIMAL_DATA.length - 1; // Chick
+                currentSpawnY = getDynamicSpawnY(); 
+                currentAnimal = spawnAnimal(type, 0, currentSpawnY, 0, true);
+            }
+
+            if (data.moves.length > lastMoveId) {
+                // 大きく遅延している（途中参加など）場合はアニメーションをスキップし一気に最新同期
+                if (data.moves.length - lastMoveId > 1) {
+                    syncStageState(data.stage_data);
+                    lastMoveId = data.moves.length;
+                } else {
+                    const m = data.moves[lastMoveId];
+                    if (m.player_id !== myPlayerId) {
+                        animateOpponentMove(m, data.stage_data);
+                    } else {
+                        lastMoveId++;
+                    }
+                }
+            }
+        } catch(e) {}
+    }
+
+    async function animateOpponentMove(move, fullStageData) {
+        isProcessingOpponentMove = true;
+        const spawnY = getDynamicSpawnY();
+        const animal = spawnAnimal(move.animal_type, move.spawn_x, spawnY, move.spawn_rotation, true);
+        
+        await new Promise(r => setTimeout(r, 800));
+        
+        animal.isSensor = false;
+        Body.setStatic(animal, false);
+        
+        const check = setInterval(() => {
+            if (!animal) { clearInterval(check); isProcessingOpponentMove = false; return; }
+            
+            if (animal.position.y > DEATH_Y || (animal.speed < 0.02 && animal.position.y > spawnY + 100)) {
+                setTimeout(() => {
+                    clearInterval(check);
+                    // アニメーション終了後、完全同期データで盤面を上書き（盤面違いバグの防止）
+                    if(fullStageData) syncStageState(fullStageData);
+                    if (move.final_y > DEATH_Y) showResult(true);
+                    lastMoveId++;
+                    isProcessingOpponentMove = false;
+                }, 500); // 落下後少し待ってから同期
+            }
+        }, 500);
+    }
+
+    function showResult(win) {
+        const overlay = document.getElementById('result-overlay');
+        const msg = document.getElementById('result-message');
+        overlay.style.display = 'flex';
+        msg.textContent = win ? 'YOU WIN!' : 'YOU LOSE...';
+        msg.className = 'result-text ' + (win ? 'result-win' : 'result-lose');
+        clearInterval(pollingTimer);
+    }
+
+    async function sendMove(isLoser) {
+        if (!currentAnimal) return;
+        
+        const bodies = Composite.allBodies(world);
+        const animalStates = [];
+        bodies.forEach(b => {
+            if (b.label === 'animal' && b !== currentAnimal) {
+                animalStates.push({ type: b.animalType, x: b.position.x, y: b.position.y, angle: b.angle });
+            }
+        });
+        animalStates.push({
+            type: currentAnimal.animalType, x: currentAnimal.position.x, y: currentAnimal.position.y, angle: currentAnimal.angle
+        });
+
+        const stageData = { platforms: platforms, animals: animalStates };
+
+        const moveData = {
+            room_id: currentRoomId, player_id: myPlayerId, animal_type: currentAnimal.animalType,
+            spawn_x: currentAnimal.position.x, spawn_rotation: currentAnimal.angle,
+            final_x: currentAnimal.position.x, final_y: currentAnimal.position.y,
+            final_rotation: currentAnimal.angle, is_loser: isLoser,
+            stage_data: stageData
+        };
+        currentAnimal = null; isDropping = false;
+        await fetch('api.php?action=place_move', { method: 'POST', body: JSON.stringify(moveData) });
+        if (isLoser) showResult(false);
+        else { lastMoveId++; fetchState(); }
+    }
+
+    function getMousePos(e) {
+        const x = (e.clientX / window.innerWidth) * logicalWidth - (logicalWidth / 2);
+        const y = (e.clientY / window.innerHeight) * LOGICAL_HEIGHT + VIEW_Y_MIN;
+        return { x, y };
+    }
+
+    window.addEventListener('mousedown', (e) => {
+        if (gameState === 'editing') {
+            if (e.button === 0) startPoint = getMousePos(e);
+            else if (e.button === 2) {
+                const pos = getMousePos(e);
+                const p = Composite.allBodies(world).find(b => b.label === 'platform' && Bounds.contains(b.bounds, pos));
+                if (p) { Composite.remove(world, p); platforms = platforms.filter(pl => pl.x !== p.position.x || pl.y !== p.position.y); }
+            }
+        } else if (gameState === 'playing' && currentAnimal && !isDropping && !isProcessingOpponentMove && myRole === currentTurnRole) {
+            if (e.button === 0) dropAnimal();
+            else if (e.button === 2) Body.rotate(currentAnimal, Math.PI / 4);
+        }
+    });
+
+    window.addEventListener('mousemove', (e) => {
+        const pos = getMousePos(e);
+        if (gameState === 'editing' && startPoint) {
+            if (tempBody) Composite.remove(world, tempBody);
+            const w = Math.abs(pos.x - startPoint.x), h = Math.abs(pos.y - startPoint.y);
+            tempBody = Bodies.rectangle((pos.x + startPoint.x)/2, (pos.y + startPoint.y)/2, Math.max(w,5), Math.max(h,5), { isStatic: true, render: { fillStyle: 'rgba(85,107,47,0.5)' } });
+            Composite.add(world, tempBody);
+        } else if (gameState === 'playing' && currentAnimal && !isDropping) {
+            Body.setPosition(currentAnimal, { x: pos.x, y: currentSpawnY });
+        }
+    });
+
+    window.addEventListener('mouseup', (e) => {
+        if (gameState === 'editing' && e.button === 0 && startPoint) {
+            const pos = getMousePos(e);
+            if (tempBody) Composite.remove(world, tempBody);
+            const w = Math.abs(pos.x - startPoint.x), h = Math.abs(pos.y - startPoint.y);
+            if (w > 10 && h > 10) createPlatform((pos.x + startPoint.x)/2, (pos.y + startPoint.y)/2, w, h);
+            startPoint = null; tempBody = null;
+        }
+    });
+
+    window.addEventListener('contextmenu', (e) => e.preventDefault());
+
+    function dropAnimal() {
+        if (!currentAnimal || isDropping) return;
+        isDropping = true;
+        currentAnimal.isSensor = false; // 実体化
+        Body.setStatic(currentAnimal, false);
+        const check = setInterval(() => {
+            if (!currentAnimal) { clearInterval(check); return; }
+            if (currentAnimal.position.y > DEATH_Y) { 
+                clearInterval(check); sendMove(true); 
+            } else if (currentAnimal.speed < 0.02 && currentAnimal.position.y > currentSpawnY + 50) {
+                // スピード0.02以下（ほぼ完全静止）まで待機を厳格化
+                setTimeout(() => { 
+                    if (currentAnimal && currentAnimal.speed < 0.02) { 
+                        clearInterval(check); sendMove(false); 
+                    } 
+                }, 1500); // 完全に止まったか1.5秒待ってから手番を終了する（滑り落ち防止）
+            }
+        }, 500);
+    }
+
+    document.getElementById('create-room-btn').onclick = showEditor;
+    document.getElementById('save-stage-btn').onclick = createRoom;
+    document.getElementById('clear-stage-btn').onclick = () => { clearPhysics(); };
+    document.getElementById('cancel-editor-btn').onclick = showLobby;
+    document.getElementById('refresh-btn').onclick = loadRooms;
+    document.getElementById('back-to-lobby-btn').onclick = showLobby;
+    showLobby();
+</script>
+</body>
+</html>
