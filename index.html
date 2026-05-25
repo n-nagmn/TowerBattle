@@ -491,14 +491,7 @@
         };
     }
 
-    function handleInputStart(e) {
-        if (e.target.tagName !== 'CANVAS') return;
-        if (e.touches) {
-            e.preventDefault();
-            e.button = 0; 
-            e.clientX = e.touches[0].clientX;
-            e.clientY = e.touches[0].clientY;
-        }
+    window.addEventListener('mousedown', (e) => {
         if (gameState === 'editor') {
             if (e.button === 0) startPoint = getMousePos(e);
             else if (e.button === 2) {
@@ -510,15 +503,9 @@
             if (e.button === 0) dropAnimal();
             else if (e.button === 2) Body.rotate(currentAnimal, Math.PI / 4);
         }
-    }
+    });
 
-    function handleInputMove(e) {
-        if (e.target.tagName !== 'CANVAS') return;
-        if (e.touches) {
-            e.preventDefault();
-            e.clientX = e.touches[0].clientX;
-            e.clientY = e.touches[0].clientY;
-        }
+    window.addEventListener('mousemove', (e) => {
         if (gameState === 'editor' && startPoint) {
             if (tempBody) Composite.remove(world, tempBody);
             const pos = getMousePos(e);
@@ -526,13 +513,12 @@
             tempBody = Bodies.rectangle((pos.x + startPoint.x)/2, (pos.y + startPoint.y)/2, Math.max(w,5), Math.max(h,5), { isStatic: true, render: { fillStyle: 'rgba(85,107,47,0.5)' } });
             Composite.add(world, tempBody);
         } else if (gameState === 'playing' && currentAnimal && !isDropping && myRole === currentTurnRole) {
-            const pos = getMousePos();
+            const pos = getMousePos(e);
             Body.setPosition(currentAnimal, { x: pos.x, y: pos.y });
         }
-    }
+    });
 
-    function handleInputEnd(e) {
-        if (e.target && e.target.tagName !== 'CANVAS' && e.type !== 'touchend') return;
+    window.addEventListener('mouseup', (e) => {
         if (gameState === 'editor' && e.button === 0 && startPoint) {
             const pos = getMousePos(e);
             if (tempBody) Composite.remove(world, tempBody);
@@ -540,14 +526,7 @@
             if (w > 10 && h > 10) createPlatform((pos.x + startPoint.x)/2, (pos.y + startPoint.y)/2, w, h);
             startPoint = null; tempBody = null;
         }
-    }
-
-    window.addEventListener('mousedown', handleInputStart);
-    window.addEventListener('mousemove', handleInputMove);
-    window.addEventListener('mouseup', handleInputEnd);
-    window.addEventListener('touchstart', handleInputStart, { passive: false });
-    window.addEventListener('touchmove', handleInputMove, { passive: false });
-    window.addEventListener('touchend', handleInputEnd);
+    });
     
     window.addEventListener('contextmenu', (e) => e.preventDefault());
 
