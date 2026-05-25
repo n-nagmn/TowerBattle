@@ -6,6 +6,7 @@
     <title>タワーバトル</title>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/poly-decomp.js/0.2.1/poly-decomp.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/matter-js/0.19.0/matter.min.js"></script>
+    <script src="/socket.io/socket.io.js"></script>
     <style>
         * { box-sizing: border-box; }
         body {
@@ -14,15 +15,15 @@
             display: flex; flex-direction: column; align-items: center; justify-content: center;
             height: 100vh; width: 100vw;
         }
-        #lobby, #editor-ui, #game-ui, #result-overlay {
+        .ui-layer {
             position: absolute; top: 0; left: 0; width: 100%; height: 100%;
             display: flex; flex-direction: column; align-items: center; justify-content: center;
             z-index: 10; pointer-events: none;
         }
-        #lobby > *, #editor-ui > *, #game-ui > *, #result-overlay > * { pointer-events: auto; }
+        .ui-layer > * { pointer-events: auto; }
         
         .panel {
-            background: rgba(255, 255, 255, 0.95); padding: 20px; border-radius: 12px;
+            background: rgba(255, 255, 255, 0.95); padding: 30px; border-radius: 12px;
             box-shadow: 0 10px 25px rgba(0,0,0,0.2); text-align: center; max-width: 95%; width: 450px;
         }
         .room-list {
@@ -39,25 +40,30 @@
             display: flex; align-items: center; justify-content: center; border-radius: 4px;
             overflow: hidden; position: relative;
         }
-        .thumb-platform { position: absolute; background: #556B2F; min-height: 2px; }
+        .thumb-platform { position: absolute; background: #556B2F; }
 
         button {
-            padding: 10px 15px; font-size: 14px; cursor: pointer; border: none;
-            border-radius: 6px; background-color: #4CAF50; color: white; margin: 3px;
-            font-weight: bold;
+            padding: 12px 20px; font-size: 16px; cursor: pointer; border: none;
+            border-radius: 6px; background-color: #4CAF50; color: white; margin: 5px;
+            font-weight: bold; width: 100%; transition: background-color 0.2s;
         }
+        button:hover { background-color: #45a049; }
         button.secondary { background-color: #2196F3; }
+        button.secondary:hover { background-color: #1976D2; }
         button.danger { background-color: #f44336; }
+        button.danger:hover { background-color: #d32f2f; }
 
         #game-info {
             position: absolute; top: 10px; width: 100%; text-align: center;
             pointer-events: none;
         }
         #status-bar {
-            background: rgba(255, 255, 255, 0.9); padding: 8px 20px; border-radius: 20px;
-            display: inline-block; font-weight: bold; font-size: 16px; box-shadow: 0 3px 10px rgba(0,0,0,0.2);
-            pointer-events: auto; border: 2px solid #4CAF50;
+            background: rgba(255, 255, 255, 0.9); padding: 10px 25px; border-radius: 25px;
+            display: inline-block; font-weight: bold; font-size: 18px; box-shadow: 0 3px 10px rgba(0,0,0,0.2);
+            pointer-events: auto; border: 2px solid #4CAF50; transition: all 0.3s;
         }
+        .my-turn { border-color: #4CAF50 !important; color: #4CAF50; }
+        .opponent-turn { border-color: #f44336 !important; color: #f44336; }
 
         #canvas-container {
             position: absolute; top: 0; left: 0; width: 100vw; height: 100vh; z-index: 1;
@@ -65,7 +71,8 @@
         canvas { width: 100%; height: 100%; }
 
         #result-overlay {
-            display: none; z-index: 100; background: rgba(0,0,0,0.3);
+            display: none; z-index: 100; background: rgba(0,0,0,0.5);
+            backdrop-filter: blur(5px);
         }
         .result-text {
             font-size: 80px; font-weight: 900; color: white;
@@ -74,17 +81,23 @@
         }
         .result-win { color: #FFD700; }
         .result-lose { color: #FF4B2B; }
+        
+        .loader {
+            border: 5px solid #f3f3f3; border-top: 5px solid #4CAF50; border-radius: 50%;
+            width: 40px; height: 40px; animation: spin 1s linear infinite; margin: 20px auto;
+        }
 
         @keyframes bounceIn {
             0% { transform: scale(0.1); opacity: 0; }
             60% { transform: scale(1.2); opacity: 1; }
             100% { transform: scale(1); }
         }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
 
         #controls-hint {
-            position: absolute; bottom: 20px; color: #555; font-size: 14px;
-            background: rgba(255,255,255,0.7); padding: 5px 15px; border-radius: 15px;
-            pointer-events: none;
+            position: absolute; bottom: 20px; color: #555; font-size: 15px;
+            background: rgba(255,255,255,0.85); padding: 8px 20px; border-radius: 20px;
+            pointer-events: none; font-weight: bold; box-shadow: 0 2px 5px rgba(0,0,0,0.1);
         }
     </style>
 </head>
@@ -92,48 +105,69 @@
 
 <div id="canvas-container"></div>
 
-<div id="lobby">
+<!-- 1. Title Screen -->
+<div id="title-screen" class="ui-layer">
     <div class="panel">
-        <h1>タワーバトル</h1>
-        <div id="room-container" class="room-list"></div>
-        <div style="margin-top: 10px;">
-            <button id="create-room-btn">ステージを作って対戦募集</button>
-            <button id="refresh-btn" class="secondary">更新</button>
-        </div>
+        <h1 style="font-size: 32px; margin-bottom: 30px; color: #333;">タワーバトル</h1>
+        <button id="btn-goto-host">ホストになる (ステージ作成)</button>
+        <button id="btn-goto-guest" class="secondary">ゲストとして参加 (募集を探す)</button>
     </div>
 </div>
 
-<div id="editor-ui" style="display: none;">
+<!-- 2. Editor UI -->
+<div id="editor-ui" class="ui-layer" style="display: none;">
     <div class="panel">
-        <h2>ステージ作成</h2>
-        <p style="font-size: 14px; margin-bottom: 10px;">ドラッグで足場を配置 / 右クリックで削除</p>
-        <div class="btn-group">
-            <button id="save-stage-btn">募集開始</button>
-            <button id="clear-stage-btn" class="danger">すべてクリア</button>
-            <button id="cancel-editor-btn" class="secondary">戻る</button>
-        </div>
+        <h2 style="margin-top:0;">ステージ作成</h2>
+        <p style="font-size: 14px; margin-bottom: 20px; color: #666;">
+            ドラッグで足場を配置<br>右クリックで削除
+        </p>
+        <button id="btn-start-recruit">募集開始</button>
+        <button id="btn-clear-stage" class="danger">すべてクリア</button>
+        <button id="btn-cancel-editor" class="secondary" style="margin-top: 15px;">タイトルへ戻る</button>
     </div>
 </div>
 
-<div id="game-ui" style="display: none;">
+<!-- 3. Rooms UI (Guest) -->
+<div id="rooms-ui" class="ui-layer" style="display: none;">
+    <div class="panel">
+        <h2 style="margin-top:0;">募集中の部屋</h2>
+        <div id="room-list-container" class="room-list"></div>
+        <button id="btn-refresh-rooms" class="secondary">リスト更新</button>
+        <button id="btn-cancel-rooms" class="danger" style="margin-top: 15px;">タイトルへ戻る</button>
+    </div>
+</div>
+
+<!-- 4. Lobby UI (Host Waiting) -->
+<div id="lobby-ui" class="ui-layer" style="display: none;">
+    <div class="panel">
+        <h2>対戦相手を待っています...</h2>
+        <div class="loader"></div>
+        <button id="btn-cancel-lobby" class="danger" style="margin-top: 20px;">キャンセル</button>
+    </div>
+</div>
+
+<!-- 5. Game UI -->
+<div id="game-ui" class="ui-layer" style="display: none;">
     <div id="game-info">
         <div id="status-bar">接続中...</div>
     </div>
-    <div id="controls-hint">左クリック：落とす / 右クリック：回転</div>
+    <div id="controls-hint">マウス移動：高さと位置 / 左クリック：落とす / 右クリック：回転</div>
 </div>
 
-<div id="result-overlay">
+<!-- 6. Result Overlay -->
+<div id="result-overlay" class="ui-layer">
     <div class="result-text" id="result-message">WIN</div>
-    <button id="back-to-lobby-btn" style="margin-top: 30px; padding: 15px 30px; font-size: 20px;">ロビーへ戻る</button>
+    <button id="btn-back-to-title" style="margin-top: 40px; padding: 15px 40px; font-size: 22px;">タイトルへ戻る</button>
 </div>
 
 <script>
-    // --- Configuration ---
+    // --- Data Configuration ---
     const LOGICAL_HEIGHT = 1200; 
-    const DEATH_Y = 800; // 落下判定ライン
+    const DEATH_Y = 800;
     const VIEW_Y_MIN = -700;
     const VIEW_Y_MAX = 900;
     
+    // 複雑な形状にした動物データ
     const ANIMAL_DATA = [
         { name: 'Goat', img: 'https://img.icons8.com/color/144/goat.png', w: 80, h: 80, mass: 1, vertices: [{x:-30,y:-20}, {x:-10,y:-40}, {x:20,y:-40}, {x:40,y:-10}, {x:40,y:20}, {x:25,y:40}, {x:-25,y:40}, {x:-40,y:10}] },
         { name: 'Turtle', img: 'https://img.icons8.com/color/144/turtle.png', w: 90, h: 50, mass: 0.8, vertices: [{x:-45,y:10}, {x:-30,y:-10}, {x:-15,y:-25}, {x:15,y:-25}, {x:30,y:-10}, {x:45,y:10}, {x:45,y:25}, {x:-45,y:25}] },
@@ -149,12 +183,14 @@
         { name: 'Chick', img: 'https://img.icons8.com/color/144/chick.png', w: 30, h: 30, mass: 0.1, vertices: [{x:-10,y:-15}, {x:5,y:-15}, {x:15,y:-5}, {x:15,y:10}, {x:5,y:15}, {x:-10,y:15}, {x:-15,y:5}], rare: true }
     ];
 
+    let preloadedImages = {};
+    ANIMAL_DATA.forEach(a => { const img = new Image(); img.crossOrigin = "anonymous"; img.src = a.img; preloadedImages[a.name] = img; });
+
     // --- Matter.js Setup ---
-    const { Engine, Render, Runner, Bodies, Composite, Body, Common, Vertices, Bounds } = Matter;
+    const { Engine, Render, Runner, Bodies, Composite, Body, Common, Vertices, Bounds, Mouse } = Matter;
     if (window.decomp) Common.setDecomp(window.decomp);
 
     const engine = Engine.create({ enableSleeping: true });
-    // 貫通防止と同期精度のためにイテレーションを大幅に向上
     engine.positionIterations = 16; 
     engine.velocityIterations = 16;
     const world = engine.world;
@@ -165,113 +201,170 @@
         options: { width: window.innerWidth, height: window.innerHeight, wireframes: false, background: 'transparent', hasBounds: true }
     });
 
+    // Mouse tracker (完璧な座標マッピング)
+    const matterMouse = Mouse.create(render.canvas);
+
     let logicalWidth = LOGICAL_HEIGHT * (window.innerWidth / window.innerHeight);
     function resize() {
         logicalWidth = LOGICAL_HEIGHT * (window.innerWidth / window.innerHeight);
         render.canvas.width = window.innerWidth;
         render.canvas.height = window.innerHeight;
         Render.lookAt(render, { min: { x: -logicalWidth / 2, y: VIEW_Y_MIN }, max: { x: logicalWidth / 2, y: VIEW_Y_MAX } });
+        matterMouse.pixelRatio = window.devicePixelRatio;
     }
     window.addEventListener('resize', resize);
     resize();
     Render.run(render);
-    Runner.run(Runner.create(), engine);
+    const runner = Runner.create();
+    Runner.run(runner, engine);
 
     const ground = Bodies.rectangle(0, 5000, 20000, 200, { isStatic: true, label: 'ground' });
     Composite.add(world, ground);
 
     // --- State Variables ---
-    let preloadedImages = {};
-    ANIMAL_DATA.forEach(a => { const img = new Image(); img.crossOrigin = "anonymous"; img.src = a.img; preloadedImages[a.name] = img; });
-
     let platforms = [];
-    let animals = [];
-    let myPlayerId = 'p_' + Math.random().toString(36).substr(2, 9);
-    let currentRoomId = null;
+    let gameState = 'title'; // title, editing, rooms, lobby, playing
     let myRole = null;
-    let gameState = 'lobby'; 
+    let currentTurnRole = null;
     let currentAnimal = null;
     let isDropping = false;
-    let lastMoveId = 0;
-    let pollingTimer = null;
-    let isProcessingOpponentMove = false;
-    let currentTurnRole = 'player_1';
-    let currentSpawnY = 0; 
     let startPoint = null;
     let tempBody = null;
+    let syncInterval = null;
+
+    // --- Socket.IO Setup ---
+    const socket = io();
+
+    socket.on('rooms_updated', () => {
+        if(gameState === 'rooms') fetchRooms();
+    });
+
+    socket.on('game_started', (data) => {
+        showScreen('game');
+        if (myRole === 'host') {
+            currentTurnRole = 'host';
+            updateStatusBar();
+            spawnNextAnimal();
+            startPhysicsSync();
+        } else {
+            currentTurnRole = 'host';
+            updateStatusBar();
+        }
+    });
+
+    // 高速・完全同期で相手の物理演算状態を受信
+    socket.on('sync_state', (data) => {
+        if (gameState !== 'playing' || myRole === currentTurnRole) return;
+        
+        // 自分のエンジンで計算させないために、送られてきた座標で強制上書き
+        const bodies = Composite.allBodies(world);
+        const animalBodies = bodies.filter(b => b.label === 'animal');
+        
+        // 簡単のため、IDを割り当てて同期するアプローチではなく
+        // 受信した個数に合わせて盤面を完全に再構築するか、マッチングさせる
+        // 今回は配列順序が同じであることを前提に強制同期する
+        
+        // もし数が違えば再構築
+        if (animalBodies.length !== data.animals.length) {
+            animalBodies.forEach(b => Composite.remove(world, b));
+            data.animals.forEach(a => {
+                const b = spawnAnimal(a.type, a.x, a.y, a.angle, true);
+                if (b) {
+                    Body.setStatic(b, true); // ゲスト側では全てStaticとして扱い、勝手に落ちないようにする
+                }
+            });
+        } else {
+            // 数が同じなら位置と角度だけ上書き
+            for(let i=0; i<animalBodies.length; i++) {
+                Body.setPosition(animalBodies[i], { x: data.animals[i].x, y: data.animals[i].y });
+                Body.setAngle(animalBodies[i], data.animals[i].angle);
+                Body.setStatic(animalBodies[i], true); // ゲスト側では常にStatic
+            }
+        }
+    });
+
+    socket.on('turn_passed', (data) => {
+        if (gameState !== 'playing') return;
+        currentTurnRole = data.nextTurn;
+        updateStatusBar();
+        
+        // ターンが渡る前に盤面を確定
+        syncStageState(data.stageData);
+
+        if (myRole === currentTurnRole) {
+            spawnNextAnimal();
+            startPhysicsSync(); // 自分のターンになったので同期送信開始
+        } else {
+            stopPhysicsSync(); // 相手のターンなので送信停止
+        }
+    });
+
+    socket.on('game_over', (data) => {
+        if (gameState !== 'playing') return;
+        stopPhysicsSync();
+        const iWin = (data.loser !== socket.id);
+        showResult(iWin);
+    });
+
+    socket.on('opponent_disconnected', () => {
+        if (gameState === 'playing' || gameState === 'lobby') {
+            alert('対戦相手が切断しました。タイトルに戻ります。');
+            showScreen('title');
+        }
+    });
 
     // --- Core Functions ---
 
-    function getDynamicSpawnY() {
-        let minY = 500; // 初期基準を少し下げる
-        const bodies = Composite.allBodies(world);
-        for(let i=0; i<bodies.length; i++) {
-            if(bodies[i].label === 'animal' && bodies[i].position.y < minY) {
-                minY = bodies[i].position.y;
-            }
-        }
-        // 最も高い動物よりさらに 300px 上からスポーン（高さを少し高く）
-        return minY - 300;
-    }
-
-    function showLobby() {
-        gameState = 'lobby';
-        document.getElementById('lobby').style.display = 'flex';
+    function showScreen(screen) {
+        gameState = screen;
+        document.getElementById('title-screen').style.display = 'none';
         document.getElementById('editor-ui').style.display = 'none';
+        document.getElementById('rooms-ui').style.display = 'none';
+        document.getElementById('lobby-ui').style.display = 'none';
         document.getElementById('game-ui').style.display = 'none';
         document.getElementById('result-overlay').style.display = 'none';
-        clearPhysics();
-        loadRooms();
-    }
 
-    function showEditor() {
-        gameState = 'editing';
-        document.getElementById('lobby').style.display = 'none';
-        document.getElementById('editor-ui').style.display = 'flex';
-        document.getElementById('game-ui').style.display = 'none';
-        clearPhysics();
-        createPlatform(0, 500, 300, 40);
-    }
-
-    function showGame(role, roomId) {
-        gameState = 'playing';
-        myRole = role;
-        currentRoomId = roomId;
-        document.getElementById('lobby').style.display = 'none';
-        document.getElementById('editor-ui').style.display = 'none';
-        document.getElementById('game-ui').style.display = 'flex';
-        startPolling();
+        if (screen === 'title') {
+            document.getElementById('title-screen').style.display = 'flex';
+            clearPhysics();
+            if(socket.currentRoom) socket.disconnect(); // 一度切断して再接続(初期化)
+            socket.connect();
+        } else if (screen === 'editor') {
+            document.getElementById('editor-ui').style.display = 'flex';
+            clearPhysics();
+            createPlatform(0, 500, 300, 40);
+        } else if (screen === 'rooms') {
+            document.getElementById('rooms-ui').style.display = 'flex';
+            fetchRooms();
+        } else if (screen === 'lobby') {
+            document.getElementById('lobby-ui').style.display = 'flex';
+        } else if (screen === 'game') {
+            document.getElementById('game-ui').style.display = 'flex';
+        }
     }
 
     function clearPhysics() {
         Composite.clear(world, false);
         Composite.add(world, ground);
         platforms = [];
-        animals = [];
         currentAnimal = null;
         isDropping = false;
-        lastMoveId = 0;
-        isProcessingOpponentMove = false;
-        if (pollingTimer) clearInterval(pollingTimer);
+        stopPhysicsSync();
     }
 
-    async function loadRooms() {
-        try {
-            const res = await fetch('api.php?action=get_rooms');
-            const data = await res.json();
-            const container = document.getElementById('room-container');
+    function fetchRooms() {
+        socket.emit('get_rooms', (availableRooms) => {
+            const container = document.getElementById('room-list-container');
             container.innerHTML = '';
-            if (!data.rooms || data.rooms.length === 0) {
+            if (availableRooms.length === 0) {
                 container.innerHTML = '<div style="grid-column:1/3;padding:20px;color:#666;">募集中の部屋はありません</div>';
                 return;
             }
-            data.rooms.forEach(room => {
+            availableRooms.forEach(room => {
                 const card = document.createElement('div');
                 card.className = 'room-card';
-                let stageData = { platforms: [] };
-                try { stageData = JSON.parse(room.stage_data || '{"platforms":[]}'); } catch(e) {}
                 let thumbHtml = '<div class="room-thumbnail">';
-                stageData.platforms.forEach(p => {
+                room.stageData.platforms.forEach(p => {
                     const tx = ((p.x + 500) / 1000) * 100;
                     const ty = ((p.y + 500) / 1500) * 60;
                     const tw = (p.w / 1000) * 100;
@@ -279,25 +372,22 @@
                     thumbHtml += `<div class="thumb-platform" style="left:${tx-tw/2}%; top:${ty-th/2}%; width:${tw}%; height:${th}px;"></div>`;
                 });
                 thumbHtml += '</div>';
-                card.innerHTML = `${thumbHtml}<div>Room #${room.room_id}</div>`;
-                card.onclick = () => joinRoom(room.room_id);
+                card.innerHTML = `${thumbHtml}<div>部屋に参加</div>`;
+                card.onclick = () => {
+                    socket.emit('join_room', room.roomId, (res) => {
+                        if(res.success) {
+                            myRole = 'guest';
+                            clearPhysics();
+                            res.stageData.platforms.forEach(p => createPlatform(p.x, p.y, p.w, p.h));
+                            showScreen('lobby'); // すぐにgame_startedイベントが来るはず
+                        } else {
+                            alert(res.message);
+                        }
+                    });
+                };
                 container.appendChild(card);
             });
-        } catch(e) {}
-    }
-
-    async function createRoom() {
-        const res = await fetch('api.php?action=create_room', {
-            method: 'POST',
-            body: JSON.stringify({ host_id: myPlayerId, stage_data: platforms })
         });
-        const data = await res.json();
-        showGame('player_1', data.room_id);
-    }
-
-    async function joinRoom(roomId) {
-        await fetch('api.php?action=join_room', { method: 'POST', body: JSON.stringify({ room_id: roomId, player_id: myPlayerId }) });
-        showGame('player_2', roomId);
     }
 
     function createPlatform(x, y, w, h) {
@@ -327,189 +417,92 @@
     }
 
     function syncStageState(stageData) {
-        // 完全に同期させるため、既存の動物を削除して完全再現する
         const bodies = Composite.allBodies(world);
         bodies.forEach(b => {
-            if (b.label === 'animal' && b !== currentAnimal) {
-                Composite.remove(world, b);
-            }
+            if (b.label === 'animal') Composite.remove(world, b);
         });
-        
         if(stageData && stageData.animals) {
             stageData.animals.forEach(a => {
                 const newAnimal = spawnAnimal(a.type, a.x, a.y, a.angle, false);
                 if (newAnimal) {
-                    // 位置と角度を上書きし、速度を完全に0にして微小爆発を防ぐ
                     Body.setPosition(newAnimal, { x: a.x, y: a.y });
                     Body.setAngle(newAnimal, a.angle);
                     Body.setVelocity(newAnimal, {x:0, y:0});
                     Body.setAngularVelocity(newAnimal, 0);
+                    // ホスト・ゲストともに、ターン交代時に一度静止させる
                 }
             });
         }
     }
 
-    function startPolling() { fetchState(); pollingTimer = setInterval(fetchState, 500); }
-
-    async function fetchState() {
-        if (!currentRoomId || gameState !== 'playing' || isProcessingOpponentMove) return;
-        try {
-            const res = await fetch(`api.php?action=get_state&room_id=${currentRoomId}`);
-            const data = await res.json();
-            
-            // 初回足場ロード
-            if (platforms.length === 0 && data.stage_data && data.stage_data.platforms) {
-                data.stage_data.platforms.forEach(p => createPlatform(p.x, p.y, p.w, p.h));
-                syncStageState(data.stage_data);
-            }
-            
-            const turnCount = data.moves.length;
-            currentTurnRole = (turnCount % 2 === 0) ? 'player_1' : 'player_2';
-            const isMyTurn = (myRole === currentTurnRole);
-            
-            const bar = document.getElementById('status-bar');
-            bar.textContent = isMyTurn ? 'あなたの番です' : '相手の番です';
-
-            if (isMyTurn && !currentAnimal && !isDropping) {
-                let type = Math.floor(Math.random() * (ANIMAL_DATA.length - 1));
-                if (Math.random() < 0.05) type = ANIMAL_DATA.length - 1; // Chick
-                currentSpawnY = getDynamicSpawnY(); 
-                currentAnimal = spawnAnimal(type, 0, currentSpawnY, 0, true);
-            }
-
-            if (data.moves.length > lastMoveId) {
-                // 大きく遅延している（途中参加など）場合はアニメーションをスキップし一気に最新同期
-                if (data.moves.length - lastMoveId > 1) {
-                    syncStageState(data.stage_data);
-                    lastMoveId = data.moves.length;
-                } else {
-                    const m = data.moves[lastMoveId];
-                    if (m.player_id !== myPlayerId) {
-                        animateOpponentMove(m, data.stage_data);
-                    } else {
-                        lastMoveId++;
-                    }
-                }
-            }
-        } catch(e) {}
+    function spawnNextAnimal() {
+        let type = Math.floor(Math.random() * (ANIMAL_DATA.length - 1));
+        if (Math.random() < 0.05) type = ANIMAL_DATA.length - 1; // Chick
+        currentAnimal = spawnAnimal(type, 0, -200, 0, true);
+        isDropping = false;
     }
 
-    async function animateOpponentMove(move, fullStageData) {
-        isProcessingOpponentMove = true;
-        const spawnY = getDynamicSpawnY();
-        const animal = spawnAnimal(move.animal_type, move.spawn_x, spawnY, move.spawn_rotation, true);
-        
-        await new Promise(r => setTimeout(r, 200));
-        
-        animal.isSensor = false;
-        Body.setStatic(animal, false);
-        
-        const check = setInterval(() => {
-            if (!animal) { clearInterval(check); isProcessingOpponentMove = false; return; }
-            
-            let anyFell = false;
-            const bodies = Composite.allBodies(world);
-            for(let i=0; i<bodies.length; i++) {
-                if (bodies[i].label === 'animal' && bodies[i].position.y > DEATH_Y) {
-                    anyFell = true; break;
-                }
+    function updateStatusBar() {
+        const bar = document.getElementById('status-bar');
+        if (myRole === currentTurnRole) {
+            bar.textContent = 'あなたの番です';
+            bar.className = 'my-turn';
+        } else {
+            bar.textContent = '相手の番です';
+            bar.className = 'opponent-turn';
+        }
+    }
+
+    // --- Physics Sync (Socket.io Emit) ---
+    function startPhysicsSync() {
+        if(syncInterval) clearInterval(syncInterval);
+        syncInterval = setInterval(() => {
+            if (gameState !== 'playing' || myRole !== currentTurnRole) {
+                clearInterval(syncInterval); return;
             }
-
-            if (anyFell || (animal.isSleeping && animal.position.y > spawnY + 50) || (animal.speed < 0.02 && animal.position.y > spawnY + 100)) {
-                setTimeout(() => {
-                    clearInterval(check);
-                    // アニメーション終了後、完全同期データで盤面を上書き（盤面違いバグの防止）
-                    if(fullStageData) syncStageState(fullStageData);
-                    
-                    let fellAfterWait = false;
-                    const bds = Composite.allBodies(world);
-                    for(let i=0; i<bds.length; i++) {
-                        if (bds[i].label === 'animal' && bds[i].position.y > DEATH_Y) {
-                            fellAfterWait = true; break;
-                        }
-                    }
-                    if (fellAfterWait || move.final_y > DEATH_Y) showResult(true);
-                    
-                    lastMoveId++;
-                    isProcessingOpponentMove = false;
-                }, 200); // 落下後少し待ってから同期
-            }
-        }, 200);
+            const bodies = Composite.allBodies(world).filter(b => b.label === 'animal');
+            const animalsData = bodies.map(b => ({
+                type: b.animalType, x: b.position.x, y: b.position.y, angle: b.angle
+            }));
+            socket.emit('sync_state', { animals: animalsData });
+        }, 1000 / 30); // 30fps で同期
     }
 
-    function showResult(win) {
-        const overlay = document.getElementById('result-overlay');
-        const msg = document.getElementById('result-message');
-        overlay.style.display = 'flex';
-        msg.textContent = win ? 'YOU WIN!' : 'YOU LOSE...';
-        msg.className = 'result-text ' + (win ? 'result-win' : 'result-lose');
-        clearInterval(pollingTimer);
+    function stopPhysicsSync() {
+        if(syncInterval) clearInterval(syncInterval);
     }
 
-    async function sendMove(isLoser) {
-        if (!currentAnimal) return;
-        
-        const bodies = Composite.allBodies(world);
-        const animalStates = [];
-        bodies.forEach(b => {
-            if (b.label === 'animal' && b !== currentAnimal) {
-                animalStates.push({ type: b.animalType, x: b.position.x, y: b.position.y, angle: b.angle });
-            }
-        });
-        animalStates.push({
-            type: currentAnimal.animalType, x: currentAnimal.position.x, y: currentAnimal.position.y, angle: currentAnimal.angle
-        });
-
-        const stageData = { platforms: platforms, animals: animalStates };
-
-        const moveData = {
-            room_id: currentRoomId, player_id: myPlayerId, animal_type: currentAnimal.animalType,
-            spawn_x: currentAnimal.position.x, spawn_rotation: currentAnimal.angle,
-            final_x: currentAnimal.position.x, final_y: currentAnimal.position.y,
-            final_rotation: currentAnimal.angle, is_loser: isLoser,
-            stage_data: stageData
-        };
-        currentAnimal = null; isDropping = false;
-        await fetch('api.php?action=place_move', { method: 'POST', body: JSON.stringify(moveData) });
-        if (isLoser) showResult(false);
-        else { lastMoveId++; fetchState(); }
-    }
-
-    function getMousePos(e) {
-        const x = (e.clientX / window.innerWidth) * logicalWidth - (logicalWidth / 2);
-        const y = (e.clientY / window.innerHeight) * LOGICAL_HEIGHT + VIEW_Y_MIN;
-        return { x, y };
-    }
+    // --- Input Handling ---
 
     window.addEventListener('mousedown', (e) => {
-        if (gameState === 'editing') {
-            if (e.button === 0) startPoint = getMousePos(e);
+        if (gameState === 'editor') {
+            if (e.button === 0) startPoint = { x: matterMouse.position.x, y: matterMouse.position.y };
             else if (e.button === 2) {
-                const pos = getMousePos(e);
-                const p = Composite.allBodies(world).find(b => b.label === 'platform' && Bounds.contains(b.bounds, pos));
+                const p = Composite.allBodies(world).find(b => b.label === 'platform' && Bounds.contains(b.bounds, matterMouse.position));
                 if (p) { Composite.remove(world, p); platforms = platforms.filter(pl => pl.x !== p.position.x || pl.y !== p.position.y); }
             }
-        } else if (gameState === 'playing' && currentAnimal && !isDropping && !isProcessingOpponentMove && myRole === currentTurnRole) {
+        } else if (gameState === 'playing' && currentAnimal && !isDropping && myRole === currentTurnRole) {
             if (e.button === 0) dropAnimal();
             else if (e.button === 2) Body.rotate(currentAnimal, Math.PI / 4);
         }
     });
 
     window.addEventListener('mousemove', (e) => {
-        const pos = getMousePos(e);
-        if (gameState === 'editing' && startPoint) {
+        if (gameState === 'editor' && startPoint) {
             if (tempBody) Composite.remove(world, tempBody);
+            const pos = matterMouse.position;
             const w = Math.abs(pos.x - startPoint.x), h = Math.abs(pos.y - startPoint.y);
             tempBody = Bodies.rectangle((pos.x + startPoint.x)/2, (pos.y + startPoint.y)/2, Math.max(w,5), Math.max(h,5), { isStatic: true, render: { fillStyle: 'rgba(85,107,47,0.5)' } });
             Composite.add(world, tempBody);
-        } else if (gameState === 'playing' && currentAnimal && !isDropping) {
-            Body.setPosition(currentAnimal, { x: pos.x, y: currentSpawnY });
+        } else if (gameState === 'playing' && currentAnimal && !isDropping && myRole === currentTurnRole) {
+            // カーソルの位置に完全に追従 (XとY両方)
+            Body.setPosition(currentAnimal, { x: matterMouse.position.x, y: matterMouse.position.y });
         }
     });
 
     window.addEventListener('mouseup', (e) => {
-        if (gameState === 'editing' && e.button === 0 && startPoint) {
-            const pos = getMousePos(e);
+        if (gameState === 'editor' && e.button === 0 && startPoint) {
+            const pos = matterMouse.position;
             if (tempBody) Composite.remove(world, tempBody);
             const w = Math.abs(pos.x - startPoint.x), h = Math.abs(pos.y - startPoint.y);
             if (w > 10 && h > 10) createPlatform((pos.x + startPoint.x)/2, (pos.y + startPoint.y)/2, w, h);
@@ -522,53 +515,78 @@
     function dropAnimal() {
         if (!currentAnimal || isDropping) return;
         isDropping = true;
-        currentAnimal.isSensor = false; // 実体化
+        currentAnimal.isSensor = false; 
         Body.setStatic(currentAnimal, false);
         let dropStartTime = Date.now();
         
         const check = setInterval(() => {
-            if (!currentAnimal) { clearInterval(check); return; }
-            
             let anyFell = false;
-            const bodies = Composite.allBodies(world);
+            const bodies = Composite.allBodies(world).filter(b => b.label === 'animal');
             for(let i=0; i<bodies.length; i++) {
-                if (bodies[i].label === 'animal' && bodies[i].position.y > DEATH_Y) {
+                if (bodies[i].position.y > DEATH_Y) {
                     anyFell = true; break;
                 }
             }
             
-            let isTimeout = (Date.now() - dropStartTime > 5000); // 5秒経過で強制ターンエンド
+            let isTimeout = (Date.now() - dropStartTime > 5000); 
 
             if (anyFell) { 
-                clearInterval(check); sendMove(true); 
-            } else if (isTimeout || (currentAnimal.isSleeping && currentAnimal.position.y > currentSpawnY + 50) || (currentAnimal.speed < 0.02 && currentAnimal.position.y > currentSpawnY + 50)) {
-                // スピード0.02以下（ほぼ完全静止）、もしくはスリープ、もしくはタイムアウト
+                clearInterval(check); socket.emit('game_over'); 
+            } else if (isTimeout || (currentAnimal.isSleeping) || (currentAnimal.speed < 0.02)) {
                 setTimeout(() => { 
                     let fellAfterWait = false;
-                    const bds = Composite.allBodies(world);
+                    const bds = Composite.allBodies(world).filter(b => b.label === 'animal');
                     for(let i=0; i<bds.length; i++) {
-                        if (bds[i].label === 'animal' && bds[i].position.y > DEATH_Y) {
+                        if (bds[i].position.y > DEATH_Y) {
                             fellAfterWait = true; break;
                         }
                     }
 
                     if (fellAfterWait) {
-                        clearInterval(check); sendMove(true);
-                    } else if (currentAnimal && (isTimeout || currentAnimal.isSleeping || currentAnimal.speed < 0.02)) { 
-                        clearInterval(check); sendMove(false); 
+                        clearInterval(check); socket.emit('game_over');
+                    } else { 
+                        clearInterval(check);
+                        // 次のターンへ
+                        const animalsData = Composite.allBodies(world).filter(b => b.label === 'animal').map(b => ({
+                            type: b.animalType, x: b.position.x, y: b.position.y, angle: b.angle
+                        }));
+                        socket.emit('pass_turn', { stageData: { platforms: platforms, animals: animalsData } });
+                        currentAnimal = null;
                     } 
-                }, 500); // 完全に止まったか待ってから手番を終了する（滑り落ち防止）
+                }, 500); 
             }
         }, 200);
     }
 
-    document.getElementById('create-room-btn').onclick = showEditor;
-    document.getElementById('save-stage-btn').onclick = createRoom;
-    document.getElementById('clear-stage-btn').onclick = () => { clearPhysics(); };
-    document.getElementById('cancel-editor-btn').onclick = showLobby;
-    document.getElementById('refresh-btn').onclick = loadRooms;
-    document.getElementById('back-to-lobby-btn').onclick = showLobby;
-    showLobby();
+    function showResult(win) {
+        const overlay = document.getElementById('result-overlay');
+        const msg = document.getElementById('result-message');
+        overlay.style.display = 'flex';
+        msg.textContent = win ? 'YOU WIN!' : 'YOU LOSE...';
+        msg.className = 'result-text ' + (win ? 'result-win' : 'result-lose');
+    }
+
+    // --- Buttons ---
+    document.getElementById('btn-goto-host').onclick = () => showScreen('editor');
+    document.getElementById('btn-goto-guest').onclick = () => showScreen('rooms');
+    document.getElementById('btn-start-recruit').onclick = () => {
+        myRole = 'host';
+        socket.emit('create_room', { platforms: platforms }, () => {
+            showScreen('lobby');
+        });
+    };
+    document.getElementById('btn-clear-stage').onclick = () => { clearPhysics(); };
+    document.getElementById('btn-cancel-editor').onclick = () => showScreen('title');
+    document.getElementById('btn-refresh-rooms').onclick = fetchRooms;
+    document.getElementById('btn-cancel-rooms').onclick = () => showScreen('title');
+    document.getElementById('btn-cancel-lobby').onclick = () => {
+        socket.disconnect(); // 部屋を消すために切断
+        showScreen('title');
+    };
+    document.getElementById('btn-back-to-title').onclick = () => showScreen('title');
+
+    // 初期化
+    showScreen('title');
 </script>
 </body>
 </html>
