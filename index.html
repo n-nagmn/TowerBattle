@@ -161,6 +161,11 @@
     <button id="btn-back-to-title" style="margin-top: 40px; padding: 15px 40px; font-size: 22px;">タイトルへ戻る</button>
 </div>
 
+<!-- 7. Custom Notification -->
+<div id="custom-notification" style="display: none; position: fixed; top: 20px; left: 50%; transform: translateX(-50%); background: #f44336; color: white; padding: 10px 20px; border-radius: 5px; z-index: 9999; font-weight: bold; box-shadow: 0 4px 6px rgba(0,0,0,0.3);">
+    Notification
+</div>
+
 <script>
     // --- Data Configuration ---
     const LOGICAL_HEIGHT = 1200; 
@@ -302,12 +307,19 @@
 
     socket.on('opponent_disconnected', () => {
         if (gameState === 'playing' || gameState === 'lobby') {
-            alert('対戦相手が切断しました。タイトルに戻ります。');
+            showNotification('対戦相手が切断しました。タイトルに戻ります。');
             showScreen('title');
         }
     });
 
     // --- Core Functions ---
+
+    function showNotification(msg) {
+        const notif = document.getElementById('custom-notification');
+        notif.textContent = msg;
+        notif.style.display = 'block';
+        setTimeout(() => { notif.style.display = 'none'; }, 3000);
+    }
 
     function showScreen(screen) {
         gameState = screen;
@@ -375,7 +387,7 @@
                             syncStageState(res.stageData);
                             showScreen('lobby'); // すぐにgame_startedイベントが来るはず
                         } else {
-                            alert(res.message);
+                            showNotification(res.message);
                         }
                     });
                 };
