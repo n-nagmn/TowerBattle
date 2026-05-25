@@ -519,6 +519,7 @@
         currentAnimal.isSensor = false; 
         Body.setStatic(currentAnimal, false);
         let dropStartTime = Date.now();
+        let ticksBelowThreshold = 0;
         
         const check = setInterval(() => {
             let anyFell = false;
@@ -531,9 +532,15 @@
             
             let isTimeout = (Date.now() - dropStartTime > 5000); 
 
+            if (currentAnimal.speed < 0.5) {
+                ticksBelowThreshold++;
+            } else {
+                ticksBelowThreshold = 0;
+            }
+
             if (anyFell) { 
                 clearInterval(check); socket.emit('game_over'); 
-            } else if (isTimeout || (currentAnimal.isSleeping) || (currentAnimal.speed < 0.02)) {
+            } else if (isTimeout || (currentAnimal.isSleeping) || ticksBelowThreshold >= 5) {
                 clearInterval(check); // ここで即座に解除しないと、500msの間に何度もキューに入ってしまう
                 setTimeout(() => { 
                     let fellAfterWait = false;
