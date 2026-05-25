@@ -76,6 +76,14 @@ io.on('connection', (socket) => {
         }
     });
 
+    // Start Timer Sync
+    socket.on('start_timer', () => {
+        const roomId = socket.currentRoom;
+        if (roomId && rooms[roomId]) {
+            socket.to(roomId).emit('start_timer');
+        }
+    });
+
     // Game Over
     socket.on('game_over', (data) => {
         const roomId = socket.currentRoom;
