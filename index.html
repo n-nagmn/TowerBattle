@@ -467,12 +467,19 @@
     }
 
     // --- Input Handling ---
+    function getMousePos() {
+        return {
+            x: matterMouse.position.x - 500,
+            y: matterMouse.position.y - 500
+        };
+    }
 
     window.addEventListener('mousedown', (e) => {
         if (gameState === 'editor') {
-            if (e.button === 0) startPoint = { x: matterMouse.position.x, y: matterMouse.position.y };
+            if (e.button === 0) startPoint = getMousePos();
             else if (e.button === 2) {
-                const p = Composite.allBodies(world).find(b => b.label === 'platform' && Bounds.contains(b.bounds, matterMouse.position));
+                const pos = getMousePos();
+                const p = Composite.allBodies(world).find(b => b.label === 'platform' && Bounds.contains(b.bounds, pos));
                 if (p) { Composite.remove(world, p); platforms = platforms.filter(pl => pl.x !== p.position.x || pl.y !== p.position.y); }
             }
         } else if (gameState === 'playing' && currentAnimal && !isDropping && myRole === currentTurnRole) {
@@ -484,19 +491,19 @@
     window.addEventListener('mousemove', (e) => {
         if (gameState === 'editor' && startPoint) {
             if (tempBody) Composite.remove(world, tempBody);
-            const pos = matterMouse.position;
+            const pos = getMousePos();
             const w = Math.abs(pos.x - startPoint.x), h = Math.abs(pos.y - startPoint.y);
             tempBody = Bodies.rectangle((pos.x + startPoint.x)/2, (pos.y + startPoint.y)/2, Math.max(w,5), Math.max(h,5), { isStatic: true, render: { fillStyle: 'rgba(85,107,47,0.5)' } });
             Composite.add(world, tempBody);
         } else if (gameState === 'playing' && currentAnimal && !isDropping && myRole === currentTurnRole) {
-            // カーソルの位置に完全に追従 (XとY両方)
-            Body.setPosition(currentAnimal, { x: matterMouse.position.x, y: matterMouse.position.y });
+            const pos = getMousePos();
+            Body.setPosition(currentAnimal, { x: pos.x, y: pos.y });
         }
     });
 
     window.addEventListener('mouseup', (e) => {
         if (gameState === 'editor' && e.button === 0 && startPoint) {
-            const pos = matterMouse.position;
+            const pos = getMousePos();
             if (tempBody) Composite.remove(world, tempBody);
             const w = Math.abs(pos.x - startPoint.x), h = Math.abs(pos.y - startPoint.y);
             if (w > 10 && h > 10) createPlatform((pos.x + startPoint.x)/2, (pos.y + startPoint.y)/2, w, h);
