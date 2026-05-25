@@ -475,18 +475,33 @@
     }
 
     // --- Input Handling ---
-    function getMousePos() {
+    function getMousePos(e) {
+        if (e && e.clientX !== undefined) {
+            const rect = render.canvas.getBoundingClientRect();
+            const scaleX = render.canvas.width / rect.width;
+            const scaleY = render.canvas.height / rect.height;
+            return {
+                x: (e.clientX - rect.left) * scaleX - 500,
+                y: (e.clientY - rect.top) * scaleY - 500
+            };
+        }
         return {
             x: matterMouse.position.x - 500,
             y: matterMouse.position.y - 500
         };
     }
 
-    window.addEventListener('mousedown', (e) => {
+    function handleInputStart(e) {
+        if (e.touches) {
+            e.preventDefault();
+            e.button = 0; 
+            e.clientX = e.touches[0].clientX;
+            e.clientY = e.touches[0].clientY;
+        }
         if (gameState === 'editor') {
-            if (e.button === 0) startPoint = getMousePos();
+            if (e.button === 0) startPoint = getMousePos(e);
             else if (e.button === 2) {
-                const pos = getMousePos();
+                const pos = getMousePos(e);
                 const p = Composite.allBodies(world).find(b => b.label === 'platform' && Bounds.contains(b.bounds, pos));
                 if (p) { Composite.remove(world, p); platforms = platforms.filter(pl => pl.x !== p.position.x || pl.y !== p.position.y); }
             }
