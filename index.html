@@ -65,6 +65,15 @@
         .my-turn { border-color: #4CAF50 !important; color: #4CAF50; }
         .opponent-turn { border-color: #f44336 !important; color: #f44336; }
 
+        #countdown-timer {
+            position: absolute; top: 20px; right: 20px;
+            font-size: 48px; font-weight: bold; color: #f44336;
+            background: rgba(255,255,255,0.9); padding: 10px 20px;
+            border-radius: 12px; border: 3px solid #f44336;
+            box-shadow: 0 4px 10px rgba(0,0,0,0.3);
+            pointer-events: none; z-index: 100; display: none;
+        }
+
         #canvas-container {
             position: absolute; top: 0; left: 0; width: 100vw; height: 100vh; z-index: 1;
             display: flex; align-items: center; justify-content: center;
@@ -152,6 +161,7 @@
     <div id="game-info">
         <div id="status-bar">接続中...</div>
     </div>
+    <div id="countdown-timer">5</div>
     <div id="controls-hint">マウス移動：高さと位置 / 左クリック：落とす / 右クリック：回転</div>
 </div>
 
@@ -217,6 +227,19 @@
     const runner = Runner.create();
     Runner.run(runner, engine);
 
+    let isGameOverEmitted = false;
+    Matter.Events.on(engine, 'afterUpdate', () => {
+        if (gameState !== 'playing' || isGameOverEmitted || myRole !== currentTurnRole) return;
+        const bodies = Composite.allBodies(world).filter(b => b.label === 'animal');
+        for(let i=0; i<bodies.length; i++) {
+            if (bodies[i].position.y > DEATH_Y) {
+                isGameOverEmitted = true;
+                socket.emit('game_over');
+                break;
+            }
+        }
+    });
+
     const ground = Bodies.rectangle(0, 5000, 20000, 200, { isStatic: true, label: 'ground' });
     Composite.add(world, ground);
 
@@ -230,6 +253,7 @@
     let startPoint = null;
     let tempBody = null;
     let syncInterval = null;
+    let dropTimerInterval = null;
 
     // --- Socket.IO Setup ---
     const socket = io('http://172.23.72.107:3008');
@@ -239,6 +263,7 @@
     });
 
     socket.on('game_started', (data) => {
+        isGameOverEmitted = false;
         showScreen('playing');
         if (myRole === 'host') {
             currentTurnRole = 'host';
@@ -253,23 +278,25 @@
 
     // 高速・完全同期で相手の物理演算状態を受信
     socket.on('sync_state', (data) => {
+        if (data && data.action === 'start_timer') {
+            if (gameState !== 'playing' || myRole === currentTurnRole) return;
+            startCountdown(false);
+            return;
+        }
         if (gameState !== 'playing' || myRole === currentTurnRole) return;
         
         // 自分のエンジンで計算させないために、送られてきた座標で強制上書き
         const bodies = Composite.allBodies(world);
         const animalBodies = bodies.filter(b => b.label === 'animal');
         
-        // 簡単のため、IDを割り当てて同期するアプローチではなく
-        // 受信した個数に合わせて盤面を完全に再構築するか、マッチングさせる
-        // 今回は配列順序が同じであることを前提に強制同期する
-        
         // もし数が違えば再構築
         if (animalBodies.length !== data.animals.length) {
             animalBodies.forEach(b => Composite.remove(world, b));
             data.animals.forEach(a => {
-                const b = spawnAnimal(a.type, a.x, a.y, a.angle, true);
+                const b = spawnAnimal(a.type, a.x, a.y, a.angle, false);
                 if (b) {
-                    Body.setStatic(b, true); // ゲスト側では全てStaticとして扱い、勝手に落ちないようにする
+                    Body.setVelocity(b, { x: a.vx || 0, y: a.vy || 0 });
+                    Body.setAngularVelocity(b, a.vangle || 0);
                 }
             });
         } else {
@@ -277,7 +304,8 @@
             for(let i=0; i<animalBodies.length; i++) {
                 Body.setPosition(animalBodies[i], { x: data.animals[i].x, y: data.animals[i].y });
                 Body.setAngle(animalBodies[i], data.animals[i].angle);
-                Body.setStatic(animalBodies[i], true); // ゲスト側では常にStatic
+                Body.setVelocity(animalBodies[i], { x: data.animals[i].vx || 0, y: data.animals[i].vy || 0 });
+                Body.setAngularVelocity(animalBodies[i], data.animals[i].vangle || 0);
             }
         }
     });
@@ -312,7 +340,38 @@
         }
     });
 
+    socket.on('start_timer', () => {
+        if (gameState !== 'playing' || myRole === currentTurnRole) return;
+        startCountdown(false);
+    });
+
     // --- Core Functions ---
+
+    function startCountdown(isActivePlayer) {
+        let timeLeft = 5;
+        const timerEl = document.getElementById('countdown-timer');
+        timerEl.style.display = 'block';
+        timerEl.textContent = timeLeft;
+
+        if (dropTimerInterval) clearInterval(dropTimerInterval);
+        dropTimerInterval = setInterval(() => {
+            timeLeft--;
+            if (timeLeft > 0) {
+                timerEl.textContent = timeLeft;
+            } else {
+                clearInterval(dropTimerInterval);
+                timerEl.style.display = 'none';
+                if (isActivePlayer && !isGameOverEmitted) {
+                    const animalsData = Composite.allBodies(world).filter(b => b.label === 'animal').map(b => ({
+                        type: b.animalType, x: b.position.x, y: b.position.y, angle: b.angle,
+                        vx: b.velocity.x, vy: b.velocity.y, vangle: b.angularVelocity
+                    }));
+                    socket.emit('pass_turn', { stageData: { platforms: platforms, animals: animalsData } });
+                    currentAnimal = null;
+                }
+            }
+        }, 1000);
+    }
 
     function showNotification(msg) {
         const notif = document.getElementById('custom-notification');
@@ -355,7 +414,10 @@
         platforms = [];
         currentAnimal = null;
         isDropping = false;
+        isGameOverEmitted = false;
         stopPhysicsSync();
+        if(dropTimerInterval) clearInterval(dropTimerInterval);
+        document.getElementById('countdown-timer').style.display = 'none';
     }
 
     function fetchRooms() {
@@ -402,22 +464,71 @@
         Composite.add(world, p);
     }
 
+    const pixelGridCache = {};
+
     function spawnAnimal(type, x, y, angle, isStatic) {
         const data = ANIMAL_DATA[type];
         if (!data) return null;
         const img = preloadedImages[data.name];
         const hasImg = img && img.complete && img.naturalWidth !== 0;
 
-        const animal = Bodies.fromVertices(x, y, [data.vertices], {
-            isStatic: isStatic, friction: 0.5, restitution: 0.1, angle: angle,
-            render: {
-                sprite: { texture: data.img, xScale: data.w/144, yScale: data.h/144 }
-            },
-            label: 'animal', animalType: type,
-            isSensor: isStatic 
-        });
-        if (animal) Body.setMass(animal, data.mass);
-        Composite.add(world, animal);
+        let animal;
+        if (hasImg) {
+            if (!pixelGridCache[type]) {
+                const canvas = document.createElement('canvas');
+                const ctx = canvas.getContext('2d');
+                const resX = 20; const resY = Math.max(1, Math.round(20 * (data.h / data.w)));
+                canvas.width = resX; canvas.height = resY;
+                ctx.drawImage(img, 0, 0, resX, resY);
+                const imgData = ctx.getImageData(0, 0, resX, resY).data;
+                
+                const grid = [];
+                for (let py = 0; py < resY; py++) {
+                    for (let px = 0; px < resX; px++) {
+                        if (imgData[(py * resX + px) * 4 + 3] > 128) grid.push({px, py});
+                    }
+                }
+                pixelGridCache[type] = { grid, resX, resY };
+            }
+
+            const { grid, resX, resY } = pixelGridCache[type];
+            const scaleX = data.w / resX; const scaleY = data.h / resY;
+            const parts = grid.map(g => Bodies.rectangle(
+                g.px * scaleX - data.w/2 + scaleX/2, 
+                g.py * scaleY - data.h/2 + scaleY/2, 
+                scaleX + 0.5, scaleY + 0.5, { render: { visible: false } }
+            ));
+            
+            // Dummy part for rendering sprite
+            const dummyPart = Bodies.rectangle(0, 0, 1, 1, {
+                isSensor: true,
+                density: 0.00001,
+                render: {
+                    sprite: { texture: data.img, xScale: data.w/144, yScale: data.h/144 }
+                }
+            });
+            parts.push(dummyPart);
+            
+            animal = Body.create({
+                parts: parts, isStatic: isStatic, friction: 0.5, restitution: 0.1, angle: angle,
+                label: 'animal', animalType: type, isSensor: isStatic
+            });
+            
+            Body.setPosition(animal, {x, y});
+            Body.setMass(animal, data.mass);
+        } else {
+            animal = Bodies.fromVertices(x, y, [data.vertices], {
+                isStatic: isStatic, friction: 0.5, restitution: 0.1, angle: angle,
+                render: {
+                    sprite: { texture: data.img, xScale: data.w/144, yScale: data.h/144 }
+                },
+                label: 'animal', animalType: type,
+                isSensor: isStatic 
+            });
+            if (animal) Body.setMass(animal, data.mass);
+        }
+
+        if (animal) Composite.add(world, animal);
         return animal;
     }
 
@@ -440,8 +551,8 @@
                     if (newAnimal) {
                         Body.setPosition(newAnimal, { x: a.x, y: a.y });
                         Body.setAngle(newAnimal, a.angle);
-                        Body.setVelocity(newAnimal, {x:0, y:0});
-                        Body.setAngularVelocity(newAnimal, 0);
+                        Body.setVelocity(newAnimal, { x: a.vx || 0, y: a.vy || 0 });
+                        Body.setAngularVelocity(newAnimal, a.vangle || 0);
                     }
                 });
             }
@@ -449,8 +560,7 @@
     }
 
     function spawnNextAnimal() {
-        let type = Math.floor(Math.random() * (ANIMAL_DATA.length - 1));
-        if (Math.random() < 0.05) type = ANIMAL_DATA.length - 1; // Chick
+        let type = Math.floor(Math.random() * ANIMAL_DATA.length);
         currentAnimal = spawnAnimal(type, 0, -200, 0, true);
         isDropping = false;
     }
@@ -475,7 +585,8 @@
             }
             const bodies = Composite.allBodies(world).filter(b => b.label === 'animal');
             const animalsData = bodies.map(b => ({
-                type: b.animalType, x: b.position.x, y: b.position.y, angle: b.angle
+                type: b.animalType, x: b.position.x, y: b.position.y, angle: b.angle,
+                vx: b.velocity.x, vy: b.velocity.y, vangle: b.angularVelocity
             }));
             socket.emit('sync_state', { animals: animalsData });
         }, 1000 / 30); // 30fps で同期
@@ -546,55 +657,14 @@
         isDropping = true;
         currentAnimal.isSensor = false; 
         Body.setStatic(currentAnimal, false);
+        if (Matter.Sleeping) Matter.Sleeping.set(currentAnimal, false);
+        currentAnimal.isSleeping = false;
+
         const data = ANIMAL_DATA[currentAnimal.animalType];
         if (data) Body.setMass(currentAnimal, data.mass);
         
-        let dropStartTime = Date.now();
-        let ticksBelowThreshold = 0;
-        
-        const check = setInterval(() => {
-            let anyFell = false;
-            const bodies = Composite.allBodies(world).filter(b => b.label === 'animal');
-            for(let i=0; i<bodies.length; i++) {
-                if (bodies[i].position.y > DEATH_Y) {
-                    anyFell = true; break;
-                }
-            }
-            
-            let isTimeout = (Date.now() - dropStartTime > 5000); 
-
-            if (currentAnimal.speed < 0.5) {
-                ticksBelowThreshold++;
-            } else {
-                ticksBelowThreshold = 0;
-            }
-
-            if (anyFell) { 
-                clearInterval(check); socket.emit('game_over'); 
-            } else if (isTimeout || (currentAnimal.isSleeping) || ticksBelowThreshold >= 5) {
-                clearInterval(check); // ここで即座に解除しないと、500msの間に何度もキューに入ってしまう
-                setTimeout(() => { 
-                    let fellAfterWait = false;
-                    const bds = Composite.allBodies(world).filter(b => b.label === 'animal');
-                    for(let i=0; i<bds.length; i++) {
-                        if (bds[i].position.y > DEATH_Y) {
-                            fellAfterWait = true; break;
-                        }
-                    }
-
-                    if (fellAfterWait) {
-                        socket.emit('game_over');
-                    } else { 
-                        // 次のターンへ
-                        const animalsData = Composite.allBodies(world).filter(b => b.label === 'animal').map(b => ({
-                            type: b.animalType, x: b.position.x, y: b.position.y, angle: b.angle
-                        }));
-                        socket.emit('pass_turn', { stageData: { platforms: platforms, animals: animalsData } });
-                        currentAnimal = null;
-                    } 
-                }, 500); 
-            }
-        }, 200);
+        socket.emit('sync_state', { action: 'start_timer' });
+        startCountdown(true);
     }
 
     function showResult(win) {
