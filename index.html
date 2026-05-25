@@ -518,6 +518,9 @@
         isDropping = true;
         currentAnimal.isSensor = false; 
         Body.setStatic(currentAnimal, false);
+        const data = ANIMAL_DATA[currentAnimal.animalType];
+        if (data) Body.setMass(currentAnimal, data.mass);
+        
         let dropStartTime = Date.now();
         let ticksBelowThreshold = 0;
         
