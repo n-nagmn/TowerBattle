@@ -135,25 +135,25 @@
     const VIEW_Y_MAX = 900;
     
     const ANIMAL_DATA = [
-        { name: 'Goat', img: 'https://img.icons8.com/color/144/goat.png', w: 80, h: 80, mass: 1, vertices: [{x:-30,y:-30},{x:30,y:-30},{x:35,y:30},{x:-35,y:30}] },
-        { name: 'Turtle', img: 'https://img.icons8.com/color/144/turtle.png', w: 90, h: 50, mass: 0.8, vertices: [{x:-45,y:10},{x:-30,y:-25},{x:30,y:-25},{x:45,y:10},{x:45,y:25},{x:-45,y:25}] },
-        { name: 'Tiger', img: 'https://img.icons8.com/color/144/tiger.png', w: 110, h: 70, mass: 1.2, vertices: [{x:-50,y:-30},{x:50,y:-30},{x:55,y:35},{x:-55,y:35}] },
-        { name: 'Zebra', img: 'https://img.icons8.com/color/144/zebra.png', w: 110, h: 90, mass: 1.1, vertices: [{x:-50,y:-40},{x:50,y:-40},{x:55,y:45},{x:-55,y:45}] },
-        { name: 'Camel', img: 'https://img.icons8.com/color/144/camel.png', w: 120, h: 100, mass: 1.3, vertices: [{x:-50,y:-45},{x:50,y:-45},{x:60,y:50},{x:-60,y:50}] },
-        { name: 'Panda', img: 'https://img.icons8.com/color/144/panda.png', w: 90, h: 90, mass: 1.5, vertices: [{x:-40,y:-40},{x:40,y:-40},{x:45,y:45},{x:-45,y:45}] },
-        { name: 'Rhino', img: 'https://img.icons8.com/color/144/rhinoceros.png', w: 120, h: 80, mass: 2.0, vertices: [{x:-60,y:-35},{x:50,y:-35},{x:60,y:40},{x:-60,y:40}] },
-        { name: 'Hippo', img: 'https://img.icons8.com/color/144/hippopotamus.png', w: 110, h: 80, mass: 1.8, vertices: [{x:-55,y:-40},{x:30,y:-40},{x:55,y:40},{x:-55,y:40}] },
-        { name: 'Elephant', img: 'https://img.icons8.com/color/144/elephant.png', w: 130, h: 100, mass: 2.5, vertices: [{x:-65,y:-50},{x:40,y:-50},{x:65,y:50},{x:-65,y:50}] },
-        { name: 'Giraffe', img: 'https://img.icons8.com/color/144/giraffe.png', w: 70, h: 160, mass: 1.2, vertices: [{x:-10,y:-80},{x:20,y:-80},{x:35,y:-60},{x:10,y:0},{x:30,y:60},{x:20,y:80},{x:-30,y:80}] },
-        { name: 'PolarBear', img: 'https://img.icons8.com/color/144/polar-bear.png', w: 120, h: 90, mass: 2.0, vertices: [{x:-50,y:-40},{x:50,y:-40},{x:60,y:45},{x:-60,y:45}] },
-        { name: 'Chick', img: 'https://img.icons8.com/color/144/chick.png', w: 30, h: 30, mass: 0.1, vertices: [{x:-15,y:-15},{x:15,y:-15},{x:15,y:15},{x:-15,y:15}], rare: true }
+        { name: 'Goat', img: 'https://img.icons8.com/color/144/goat.png', w: 80, h: 80, mass: 1, vertices: [{x:-30,y:-20}, {x:-10,y:-40}, {x:20,y:-40}, {x:40,y:-10}, {x:40,y:20}, {x:25,y:40}, {x:-25,y:40}, {x:-40,y:10}] },
+        { name: 'Turtle', img: 'https://img.icons8.com/color/144/turtle.png', w: 90, h: 50, mass: 0.8, vertices: [{x:-45,y:10}, {x:-30,y:-10}, {x:-15,y:-25}, {x:15,y:-25}, {x:30,y:-10}, {x:45,y:10}, {x:45,y:25}, {x:-45,y:25}] },
+        { name: 'Tiger', img: 'https://img.icons8.com/color/144/tiger.png', w: 110, h: 70, mass: 1.2, vertices: [{x:-50,y:-10}, {x:-30,y:-35}, {x:30,y:-35}, {x:55,y:-10}, {x:55,y:20}, {x:40,y:35}, {x:-40,y:35}, {x:-55,y:10}] },
+        { name: 'Zebra', img: 'https://img.icons8.com/color/144/zebra.png', w: 110, h: 90, mass: 1.1, vertices: [{x:-45,y:-20}, {x:-25,y:-45}, {x:25,y:-45}, {x:50,y:-10}, {x:55,y:25}, {x:35,y:45}, {x:-35,y:45}, {x:-55,y:20}] },
+        { name: 'Camel', img: 'https://img.icons8.com/color/144/camel.png', w: 120, h: 100, mass: 1.3, vertices: [{x:-50,y:-10}, {x:-30,y:-50}, {x:-10,y:-20}, {x:10,y:-50}, {x:40,y:-20}, {x:60,y:10}, {x:50,y:50}, {x:30,y:50}, {x:10,y:20}, {x:-10,y:50}, {x:-30,y:50}, {x:-60,y:20}] },
+        { name: 'Panda', img: 'https://img.icons8.com/color/144/panda.png', w: 90, h: 90, mass: 1.5, vertices: [{x:-30,y:-40}, {x:0,y:-45}, {x:30,y:-40}, {x:45,y:-10}, {x:45,y:20}, {x:30,y:45}, {x:-30,y:45}, {x:-45,y:20}, {x:-45,y:-10}] },
+        { name: 'Rhino', img: 'https://img.icons8.com/color/144/rhinoceros.png', w: 120, h: 80, mass: 2.0, vertices: [{x:-60,y:10}, {x:-40,y:-20}, {x:-10,y:-30}, {x:30,y:-40}, {x:60,y:-10}, {x:60,y:30}, {x:40,y:40}, {x:-40,y:40}, {x:-60,y:30}] },
+        { name: 'Hippo', img: 'https://img.icons8.com/color/144/hippopotamus.png', w: 110, h: 80, mass: 1.8, vertices: [{x:-50,y:0}, {x:-40,y:-30}, {x:10,y:-40}, {x:40,y:-30}, {x:55,y:0}, {x:55,y:30}, {x:40,y:40}, {x:-40,y:40}, {x:-55,y:20}] },
+        { name: 'Elephant', img: 'https://img.icons8.com/color/144/elephant.png', w: 130, h: 100, mass: 2.5, vertices: [{x:-65,y:10}, {x:-40,y:-40}, {x:0,y:-50}, {x:40,y:-30}, {x:65,y:10}, {x:65,y:50}, {x:40,y:50}, {x:20,y:20}, {x:0,y:50}, {x:-20,y:50}, {x:-40,y:20}, {x:-65,y:40}] },
+        { name: 'Giraffe', img: 'https://img.icons8.com/color/144/giraffe.png', w: 70, h: 160, mass: 1.2, vertices: [{x:-20,y:-80}, {x:10,y:-80}, {x:20,y:-60}, {x:0,y:-20}, {x:30,y:10}, {x:35,y:50}, {x:20,y:80}, {x:0,y:80}, {x:-10,y:30}, {x:-25,y:80}, {x:-35,y:80}, {x:-30,y:30}, {x:-20,y:0}] },
+        { name: 'PolarBear', img: 'https://img.icons8.com/color/144/polar-bear.png', w: 120, h: 90, mass: 2.0, vertices: [{x:-50,y:-10}, {x:-30,y:-40}, {x:20,y:-45}, {x:50,y:-20}, {x:60,y:10}, {x:50,y:45}, {x:-40,y:45}, {x:-60,y:20}] },
+        { name: 'Chick', img: 'https://img.icons8.com/color/144/chick.png', w: 30, h: 30, mass: 0.1, vertices: [{x:-10,y:-15}, {x:5,y:-15}, {x:15,y:-5}, {x:15,y:10}, {x:5,y:15}, {x:-10,y:15}, {x:-15,y:5}], rare: true }
     ];
 
     // --- Matter.js Setup ---
     const { Engine, Render, Runner, Bodies, Composite, Body, Common, Vertices, Bounds } = Matter;
     if (window.decomp) Common.setDecomp(window.decomp);
 
-    const engine = Engine.create();
+    const engine = Engine.create({ enableSleeping: true });
     // 貫通防止と同期精度のためにイテレーションを大幅に向上
     engine.positionIterations = 16; 
     engine.velocityIterations = 16;
@@ -349,7 +349,7 @@
         }
     }
 
-    function startPolling() { fetchState(); pollingTimer = setInterval(fetchState, 1500); }
+    function startPolling() { fetchState(); pollingTimer = setInterval(fetchState, 500); }
 
     async function fetchState() {
         if (!currentRoomId || gameState !== 'playing' || isProcessingOpponentMove) return;
@@ -399,7 +399,7 @@
         const spawnY = getDynamicSpawnY();
         const animal = spawnAnimal(move.animal_type, move.spawn_x, spawnY, move.spawn_rotation, true);
         
-        await new Promise(r => setTimeout(r, 800));
+        await new Promise(r => setTimeout(r, 200));
         
         animal.isSensor = false;
         Body.setStatic(animal, false);
@@ -407,17 +407,34 @@
         const check = setInterval(() => {
             if (!animal) { clearInterval(check); isProcessingOpponentMove = false; return; }
             
-            if (animal.position.y > DEATH_Y || (animal.speed < 0.02 && animal.position.y > spawnY + 100)) {
+            let anyFell = false;
+            const bodies = Composite.allBodies(world);
+            for(let i=0; i<bodies.length; i++) {
+                if (bodies[i].label === 'animal' && bodies[i].position.y > DEATH_Y) {
+                    anyFell = true; break;
+                }
+            }
+
+            if (anyFell || (animal.isSleeping && animal.position.y > spawnY + 50) || (animal.speed < 0.02 && animal.position.y > spawnY + 100)) {
                 setTimeout(() => {
                     clearInterval(check);
                     // アニメーション終了後、完全同期データで盤面を上書き（盤面違いバグの防止）
                     if(fullStageData) syncStageState(fullStageData);
-                    if (move.final_y > DEATH_Y) showResult(true);
+                    
+                    let fellAfterWait = false;
+                    const bds = Composite.allBodies(world);
+                    for(let i=0; i<bds.length; i++) {
+                        if (bds[i].label === 'animal' && bds[i].position.y > DEATH_Y) {
+                            fellAfterWait = true; break;
+                        }
+                    }
+                    if (fellAfterWait || move.final_y > DEATH_Y) showResult(true);
+                    
                     lastMoveId++;
                     isProcessingOpponentMove = false;
-                }, 500); // 落下後少し待ってから同期
+                }, 200); // 落下後少し待ってから同期
             }
-        }, 500);
+        }, 200);
     }
 
     function showResult(win) {
@@ -507,6 +524,8 @@
         isDropping = true;
         currentAnimal.isSensor = false; // 実体化
         Body.setStatic(currentAnimal, false);
+        let dropStartTime = Date.now();
+        
         const check = setInterval(() => {
             if (!currentAnimal) { clearInterval(check); return; }
             
@@ -517,11 +536,13 @@
                     anyFell = true; break;
                 }
             }
+            
+            let isTimeout = (Date.now() - dropStartTime > 5000); // 5秒経過で強制ターンエンド
 
             if (anyFell) { 
                 clearInterval(check); sendMove(true); 
-            } else if (currentAnimal.speed < 0.02 && currentAnimal.position.y > currentSpawnY + 50) {
-                // スピード0.02以下（ほぼ完全静止）まで待機を厳格化
+            } else if (isTimeout || (currentAnimal.isSleeping && currentAnimal.position.y > currentSpawnY + 50) || (currentAnimal.speed < 0.02 && currentAnimal.position.y > currentSpawnY + 50)) {
+                // スピード0.02以下（ほぼ完全静止）、もしくはスリープ、もしくはタイムアウト
                 setTimeout(() => { 
                     let fellAfterWait = false;
                     const bds = Composite.allBodies(world);
@@ -533,12 +554,12 @@
 
                     if (fellAfterWait) {
                         clearInterval(check); sendMove(true);
-                    } else if (currentAnimal && currentAnimal.speed < 0.02) { 
+                    } else if (currentAnimal && (isTimeout || currentAnimal.isSleeping || currentAnimal.speed < 0.02)) { 
                         clearInterval(check); sendMove(false); 
                     } 
-                }, 1500); // 完全に止まったか1.5秒待ってから手番を終了する（滑り落ち防止）
+                }, 500); // 完全に止まったか待ってから手番を終了する（滑り落ち防止）
             }
-        }, 500);
+        }, 200);
     }
 
     document.getElementById('create-room-btn').onclick = showEditor;
