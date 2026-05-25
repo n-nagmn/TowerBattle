@@ -529,6 +529,8 @@
             const pos = getMousePos();
             Body.setPosition(currentAnimal, { x: pos.x, y: pos.y });
         }
+    }
+
     function handleInputEnd(e) {
         if (e.target && e.target.tagName !== 'CANVAS' && e.type !== 'touchend') return;
         if (gameState === 'editor' && e.button === 0 && startPoint) {
