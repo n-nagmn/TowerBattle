@@ -175,18 +175,18 @@
     
     // 複雑な形状にした動物データ
     const ANIMAL_DATA = [
-        { name: 'Goat', img: 'https://img.icons8.com/color/144/goat.png', w: 80, h: 80, mass: 1, vertices: [{x:-30,y:-20}, {x:-10,y:-40}, {x:20,y:-40}, {x:40,y:-10}, {x:40,y:20}, {x:25,y:40}, {x:-25,y:40}, {x:-40,y:10}] },
-        { name: 'Turtle', img: 'https://img.icons8.com/color/144/turtle.png', w: 90, h: 50, mass: 0.8, vertices: [{x:-45,y:10}, {x:-30,y:-10}, {x:-15,y:-25}, {x:15,y:-25}, {x:30,y:-10}, {x:45,y:10}, {x:45,y:25}, {x:-45,y:25}] },
-        { name: 'Tiger', img: 'https://img.icons8.com/color/144/tiger.png', w: 110, h: 70, mass: 1.2, vertices: [{x:-50,y:-10}, {x:-30,y:-35}, {x:30,y:-35}, {x:55,y:-10}, {x:55,y:20}, {x:40,y:35}, {x:-40,y:35}, {x:-55,y:10}] },
-        { name: 'Zebra', img: 'https://img.icons8.com/color/144/zebra.png', w: 110, h: 90, mass: 1.1, vertices: [{x:-45,y:-20}, {x:-25,y:-45}, {x:25,y:-45}, {x:50,y:-10}, {x:55,y:25}, {x:35,y:45}, {x:-35,y:45}, {x:-55,y:20}] },
-        { name: 'Camel', img: 'https://img.icons8.com/color/144/camel.png', w: 120, h: 100, mass: 1.3, vertices: [{x:-50,y:-10}, {x:-30,y:-50}, {x:-10,y:-20}, {x:10,y:-50}, {x:40,y:-20}, {x:60,y:10}, {x:50,y:50}, {x:30,y:50}, {x:10,y:20}, {x:-10,y:50}, {x:-30,y:50}, {x:-60,y:20}] },
-        { name: 'Panda', img: 'https://img.icons8.com/color/144/panda.png', w: 90, h: 90, mass: 1.5, vertices: [{x:-30,y:-40}, {x:0,y:-45}, {x:30,y:-40}, {x:45,y:-10}, {x:45,y:20}, {x:30,y:45}, {x:-30,y:45}, {x:-45,y:20}, {x:-45,y:-10}] },
-        { name: 'Rhino', img: 'https://img.icons8.com/color/144/rhinoceros.png', w: 120, h: 80, mass: 2.0, vertices: [{x:-60,y:10}, {x:-40,y:-20}, {x:-10,y:-30}, {x:30,y:-40}, {x:60,y:-10}, {x:60,y:30}, {x:40,y:40}, {x:-40,y:40}, {x:-60,y:30}] },
-        { name: 'Hippo', img: 'https://img.icons8.com/color/144/hippopotamus.png', w: 110, h: 80, mass: 1.8, vertices: [{x:-50,y:0}, {x:-40,y:-30}, {x:10,y:-40}, {x:40,y:-30}, {x:55,y:0}, {x:55,y:30}, {x:40,y:40}, {x:-40,y:40}, {x:-55,y:20}] },
-        { name: 'Elephant', img: 'https://img.icons8.com/color/144/elephant.png', w: 130, h: 100, mass: 2.5, vertices: [{x:-65,y:10}, {x:-40,y:-40}, {x:0,y:-50}, {x:40,y:-30}, {x:65,y:10}, {x:65,y:50}, {x:40,y:50}, {x:20,y:20}, {x:0,y:50}, {x:-20,y:50}, {x:-40,y:20}, {x:-65,y:40}] },
-        { name: 'Giraffe', img: 'https://img.icons8.com/color/144/giraffe.png', w: 70, h: 160, mass: 1.2, vertices: [{x:-20,y:-80}, {x:10,y:-80}, {x:20,y:-60}, {x:0,y:-20}, {x:30,y:10}, {x:35,y:50}, {x:20,y:80}, {x:0,y:80}, {x:-10,y:30}, {x:-25,y:80}, {x:-35,y:80}, {x:-30,y:30}, {x:-20,y:0}] },
-        { name: 'PolarBear', img: 'https://img.icons8.com/color/144/polar-bear.png', w: 120, h: 90, mass: 2.0, vertices: [{x:-50,y:-10}, {x:-30,y:-40}, {x:20,y:-45}, {x:50,y:-20}, {x:60,y:10}, {x:50,y:45}, {x:-40,y:45}, {x:-60,y:20}] },
-        { name: 'Chick', img: 'https://img.icons8.com/color/144/chick.png', w: 30, h: 30, mass: 0.1, vertices: [{x:-10,y:-15}, {x:5,y:-15}, {x:15,y:-5}, {x:15,y:10}, {x:5,y:15}, {x:-10,y:15}, {x:-15,y:5}], rare: true }
+        { name: 'Goat', img: './assets/goat.png', w: 80, h: 80, mass: 1, vertices: [{x:-30,y:-20}, {x:-10,y:-40}, {x:20,y:-40}, {x:40,y:-10}, {x:40,y:20}, {x:25,y:40}, {x:-25,y:40}, {x:-40,y:10}] },
+        { name: 'Turtle', img: './assets/turtle.png', w: 90, h: 50, mass: 0.8, vertices: [{x:-45,y:10}, {x:-30,y:-10}, {x:-15,y:-25}, {x:15,y:-25}, {x:30,y:-10}, {x:45,y:10}, {x:45,y:25}, {x:-45,y:25}] },
+        { name: 'Tiger', img: './assets/tiger.png', w: 110, h: 70, mass: 1.2, vertices: [{x:-50,y:-10}, {x:-30,y:-35}, {x:30,y:-35}, {x:55,y:-10}, {x:55,y:20}, {x:40,y:35}, {x:-40,y:35}, {x:-55,y:10}] },
+        { name: 'Zebra', img: './assets/zebra.png', w: 110, h: 90, mass: 1.1, vertices: [{x:-45,y:-20}, {x:-25,y:-45}, {x:25,y:-45}, {x:50,y:-10}, {x:55,y:25}, {x:35,y:45}, {x:-35,y:45}, {x:-55,y:20}] },
+        { name: 'Camel', img: './assets/camel.png', w: 120, h: 100, mass: 1.3, vertices: [{x:-50,y:-10}, {x:-30,y:-50}, {x:-10,y:-20}, {x:10,y:-50}, {x:40,y:-20}, {x:60,y:10}, {x:50,y:50}, {x:30,y:50}, {x:10,y:20}, {x:-10,y:50}, {x:-30,y:50}, {x:-60,y:20}] },
+        { name: 'Panda', img: './assets/panda.png', w: 90, h: 90, mass: 1.5, vertices: [{x:-30,y:-40}, {x:0,y:-45}, {x:30,y:-40}, {x:45,y:-10}, {x:45,y:20}, {x:30,y:45}, {x:-30,y:45}, {x:-45,y:20}, {x:-45,y:-10}] },
+        { name: 'Rhino', img: './assets/rhinoceros.png', w: 120, h: 80, mass: 2.0, vertices: [{x:-60,y:10}, {x:-40,y:-20}, {x:-10,y:-30}, {x:30,y:-40}, {x:60,y:-10}, {x:60,y:30}, {x:40,y:40}, {x:-40,y:40}, {x:-60,y:30}] },
+        { name: 'Hippo', img: './assets/hippo.png', w: 110, h: 80, mass: 1.8, vertices: [{x:-50,y:0}, {x:-40,y:-30}, {x:10,y:-40}, {x:40,y:-30}, {x:55,y:0}, {x:55,y:30}, {x:40,y:40}, {x:-40,y:40}, {x:-55,y:20}] },
+        { name: 'Elephant', img: './assets/elephant.png', w: 130, h: 100, mass: 2.5, vertices: [{x:-65,y:10}, {x:-40,y:-40}, {x:0,y:-50}, {x:40,y:-30}, {x:65,y:10}, {x:65,y:50}, {x:40,y:50}, {x:20,y:20}, {x:0,y:50}, {x:-20,y:50}, {x:-40,y:20}, {x:-65,y:40}] },
+        { name: 'Giraffe', img: './assets/giraffe.png', w: 70, h: 160, mass: 1.2, vertices: [{x:-20,y:-80}, {x:10,y:-80}, {x:20,y:-60}, {x:0,y:-20}, {x:30,y:10}, {x:35,y:50}, {x:20,y:80}, {x:0,y:80}, {x:-10,y:30}, {x:-25,y:80}, {x:-35,y:80}, {x:-30,y:30}, {x:-20,y:0}] },
+        { name: 'PolarBear', img: './assets/polar-bear.png', w: 120, h: 90, mass: 2.0, vertices: [{x:-50,y:-10}, {x:-30,y:-40}, {x:20,y:-45}, {x:50,y:-20}, {x:60,y:10}, {x:50,y:45}, {x:-40,y:45}, {x:-60,y:20}] },
+        { name: 'Chick', img: './assets/chick.png', w: 30, h: 30, mass: 0.1, vertices: [{x:-10,y:-15}, {x:5,y:-15}, {x:15,y:-5}, {x:15,y:10}, {x:5,y:15}, {x:-10,y:15}, {x:-15,y:5}], rare: true }
     ];
 
     let preloadedImages = {};
