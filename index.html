@@ -234,7 +234,7 @@
     });
 
     socket.on('game_started', (data) => {
-        showScreen('game');
+        showScreen('playing');
         if (myRole === 'host') {
             currentTurnRole = 'host';
             updateStatusBar();
@@ -332,7 +332,7 @@
             fetchRooms();
         } else if (screen === 'lobby') {
             document.getElementById('lobby-ui').style.display = 'flex';
-        } else if (screen === 'game') {
+        } else if (screen === 'playing') {
             document.getElementById('game-ui').style.display = 'flex';
         }
     }
