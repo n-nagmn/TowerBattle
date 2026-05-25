@@ -372,7 +372,7 @@
                         if(res.success) {
                             myRole = 'guest';
                             clearPhysics();
-                            res.stageData.platforms.forEach(p => createPlatform(p.x, p.y, p.w, p.h));
+                            syncStageState(res.stageData);
                             showScreen('lobby'); // すぐにgame_startedイベントが来るはず
                         } else {
                             alert(res.message);
@@ -413,19 +413,27 @@
     function syncStageState(stageData) {
         const bodies = Composite.allBodies(world);
         bodies.forEach(b => {
-            if (b.label === 'animal') Composite.remove(world, b);
+            if (b.label === 'animal' || b.label === 'platform') Composite.remove(world, b);
         });
-        if(stageData && stageData.animals) {
-            stageData.animals.forEach(a => {
-                const newAnimal = spawnAnimal(a.type, a.x, a.y, a.angle, false);
-                if (newAnimal) {
-                    Body.setPosition(newAnimal, { x: a.x, y: a.y });
-                    Body.setAngle(newAnimal, a.angle);
-                    Body.setVelocity(newAnimal, {x:0, y:0});
-                    Body.setAngularVelocity(newAnimal, 0);
-                    // ホスト・ゲストともに、ターン交代時に一度静止させる
-                }
-            });
+        platforms = [];
+
+        if (stageData) {
+            if (stageData.platforms) {
+                stageData.platforms.forEach(p => {
+                    createPlatform(p.x, p.y, p.w, p.h);
+                });
+            }
+            if (stageData.animals) {
+                stageData.animals.forEach(a => {
+                    const newAnimal = spawnAnimal(a.type, a.x, a.y, a.angle, false);
+                    if (newAnimal) {
+                        Body.setPosition(newAnimal, { x: a.x, y: a.y });
+                        Body.setAngle(newAnimal, a.angle);
+                        Body.setVelocity(newAnimal, {x:0, y:0});
+                        Body.setAngularVelocity(newAnimal, 0);
+                    }
+                });
+            }
         }
     }
 
