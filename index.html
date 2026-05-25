@@ -534,6 +534,7 @@
             if (anyFell) { 
                 clearInterval(check); socket.emit('game_over'); 
             } else if (isTimeout || (currentAnimal.isSleeping) || (currentAnimal.speed < 0.02)) {
+                clearInterval(check); // ここで即座に解除しないと、500msの間に何度もキューに入ってしまう
                 setTimeout(() => { 
                     let fellAfterWait = false;
                     const bds = Composite.allBodies(world).filter(b => b.label === 'animal');
@@ -544,9 +545,8 @@
                     }
 
                     if (fellAfterWait) {
-                        clearInterval(check); socket.emit('game_over');
+                        socket.emit('game_over');
                     } else { 
-                        clearInterval(check);
                         // 次のターンへ
                         const animalsData = Composite.allBodies(world).filter(b => b.label === 'animal').map(b => ({
                             type: b.animalType, x: b.position.x, y: b.position.y, angle: b.angle
