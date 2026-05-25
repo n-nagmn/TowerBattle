@@ -411,8 +411,7 @@
         const animal = Bodies.fromVertices(x, y, [data.vertices], {
             isStatic: isStatic, friction: 0.5, restitution: 0.1, angle: angle,
             render: {
-                sprite: hasImg ? { texture: data.img, xScale: data.w/144, yScale: data.h/144 } : null,
-                fillStyle: hasImg ? null : '#ff00ff'
+                sprite: { texture: data.img, xScale: data.w/144, yScale: data.h/144 }
             },
             label: 'animal', animalType: type,
             isSensor: isStatic 
