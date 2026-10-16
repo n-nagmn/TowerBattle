@@ -265,20 +265,28 @@
     socket.on('game_started', (data) => {
         isGameOverEmitted = false;
         showScreen('playing');
-        if (myRole === 'host') {
+        // ホストはguestIdを受け取り、ゲストはhostIdを受け取る
+        if (data.guestId) {
+            // ホスト側の処理
+            myRole = 'host';
             currentTurnRole = 'host';
             updateStatusBar();
             spawnNextAnimal();
             startPhysicsSync();
-        } else {
-            currentTurnRole = 'host';
+        } else if (data.hostId) {
+            // ゲスト側の処理
+            myRole = 'guest';
+            currentTurnRole = 'host'; // 最初のターンはホスト
             updateStatusBar();
         }
     });
 
     // 高速・完全同期で相手の物理演算状態を受信
     socket.on('sync_state', (data) => {
-        if (data && data.action === 'start_timer') {
+        // ペイロード検証: animals配列が存在するか確認
+        if (!data || !Array.isArray(data.animals)) return;
+        
+        if (data.action === 'start_timer') {
             if (gameState !== 'playing' || myRole === currentTurnRole) return;
             startCountdown(false);
             return;

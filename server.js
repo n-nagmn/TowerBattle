@@ -24,7 +24,18 @@ io.on('connection', (socket) => {
 
     // Create room (Host finishes editing stage)
     socket.on('create_room', (stageData, callback) => {
-        const roomId = 'room_' + Math.random().toString(36).substr(2, 9);
+        // 既に部屋にいる場合はエラー
+        if (socket.currentRoom && rooms[socket.currentRoom]) {
+            callback({ error: 'Already in a room' });
+            return;
+        }
+        
+        // ユニークなroomIdを生成（衝突防止）
+        let roomId;
+        do {
+            roomId = 'room_' + Math.random().toString(36).substr(2, 9);
+        } while (rooms[roomId]);
+        
         rooms[roomId] = { host: socket.id, guest: null, state: 'waiting', stageData: stageData, turn: 'host' };
         socket.join(roomId);
         socket.currentRoom = roomId;
@@ -60,6 +71,8 @@ io.on('connection', (socket) => {
     socket.on('sync_state', (data) => {
         const roomId = socket.currentRoom;
         if (roomId && rooms[roomId]) {
+            // ペイロード検証
+            if (!data || !Array.isArray(data.animals)) return;
             // Broadcast to everyone else in the room
             socket.to(roomId).emit('sync_state', data);
         }
@@ -70,9 +83,12 @@ io.on('connection', (socket) => {
         const roomId = socket.currentRoom;
         if (roomId && rooms[roomId]) {
             const room = rooms[roomId];
+            // 現在のターンのプレイヤーのみがターンを渡せる
+            if (socket.role !== room.turn) return;
+            
             room.turn = (room.turn === 'host') ? 'guest' : 'host';
             // Send complete stable stage data to sync perfectly before new turn
-            io.to(roomId).emit('turn_passed', { nextTurn: room.turn, stageData: data.stageData });
+            io.to(roomId).emit('turn_passed', { nextTurn: room.turn, stageData: data ? data.stageData : null });
         }
     });
 
@@ -88,7 +104,10 @@ io.on('connection', (socket) => {
     socket.on('game_over', (data) => {
         const roomId = socket.currentRoom;
         if (roomId && rooms[roomId]) {
-            io.to(roomId).emit('game_over', { loser: socket.id });
+            const room = rooms[roomId];
+            // 送信者が現在のターンのプレイヤーであること（不正防止）
+            // どちらのプレイヤーが負けたかdata.loserで判定
+            io.to(roomId).emit('game_over', { loser: data && data.loser ? data.loser : socket.id });
             delete rooms[roomId];
             io.emit('rooms_updated');
         }
