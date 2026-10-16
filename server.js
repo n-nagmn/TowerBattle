@@ -93,10 +93,15 @@ io.on('connection', (socket) => {
     });
 
     // Start Timer Sync
-    socket.on('start_timer', () => {
+    socket.on('start_timer', (data) => {
         const roomId = socket.currentRoom;
         if (roomId && rooms[roomId]) {
-            socket.to(roomId).emit('start_timer');
+            // ペイロード検証: 期待されたフィールドが存在しない場合は警告して無視
+            if (!data || typeof data !== 'object' || !('duration' in data)) {
+                console.warn('[start_timer] Invalid payload, ignoring:', data);
+                return;
+            }
+            socket.to(roomId).emit('start_timer', data);
         }
     });
 
@@ -107,7 +112,14 @@ io.on('connection', (socket) => {
             const room = rooms[roomId];
             // 送信者が現在のターンのプレイヤーであること（不正防止）
             // どちらのプレイヤーが負けたかdata.loserで判定
-            io.to(roomId).emit('game_over', { loser: data && data.loser ? data.loser : socket.id });
+            const loser = data && data.loser ? data.loser : socket.id;
+            // 勝者情報と最終スコアを含む完全なペイロードを配信
+            const payload = {
+                loser: loser,
+                winner: loser === room.host ? room.guest : room.host,
+                scores: data && data.scores ? data.scores : { host: null, guest: null }
+            };
+            io.to(roomId).emit('game_over', payload);
             delete rooms[roomId];
             io.emit('rooms_updated');
         }

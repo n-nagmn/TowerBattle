@@ -79,6 +79,9 @@
             display: flex; align-items: center; justify-content: center;
         }
         canvas { max-width: 100%; max-height: 100%; object-fit: contain; aspect-ratio: 1000 / 1200; }
+        /* レターボックスでも描画がキャンバス全体にフィットするよう、
+           等倍スケーリングを維持してマウス座標変換を正確にする */
+        #canvas-container canvas { width: auto; height: auto; }
 
         #result-overlay {
             display: none; z-index: 100; background: rgba(0,0,0,0.5);
@@ -234,7 +237,14 @@
         for(let i=0; i<bodies.length; i++) {
             if (bodies[i].position.y > DEATH_Y) {
                 isGameOverEmitted = true;
-                socket.emit('game_over');
+                // 最終スコア（各側の配置済み動物数）を添えて送信
+                const dropped = Composite.allBodies(world).filter(b => b.label === 'animal' && b !== currentAnimal);
+                const myScore = dropped.filter(b => b.ownerRole === myRole).length;
+                const oppScore = dropped.filter(b => b.ownerRole !== myRole).length;
+                const scores = {};
+                scores[myRole] = myScore;
+                scores[myRole === 'host' ? 'guest' : 'host'] = oppScore;
+                socket.emit('game_over', { scores: scores });
                 break;
             }
         }
@@ -348,7 +358,12 @@
         }
     });
 
-    socket.on('start_timer', () => {
+    socket.on('start_timer', (data) => {
+        // ペイロード検証: duration フィールドが期待される
+        if (!data || typeof data !== 'object' || !('duration' in data)) {
+            console.warn('[start_timer] Invalid payload, ignoring:', data);
+            return;
+        }
         if (gameState !== 'playing' || myRole === currentTurnRole) return;
         startCountdown(false);
     });
@@ -507,15 +522,35 @@
                 scaleX + 0.5, scaleY + 0.5, { render: { visible: false } }
             ));
             
-            // Dummy part for rendering sprite
-            const dummyPart = Bodies.rectangle(0, 0, 1, 1, {
-                isSensor: true,
-                density: 0.00001,
-                render: {
-                    sprite: { texture: data.img, xScale: data.w/144, yScale: data.h/144 }
+            // スプライト描画用センサーパーツ
+            // 画像の不透明ピクセルの境界框から作成することで、コンポジットの
+            // bounds / センサー判定が動物の全パーツ（頭・胴体・足）全体をカバーする
+            const spriteBounds = (function() {
+                let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+                grid.forEach(g => {
+                    const lx = g.px * scaleX - data.w/2;
+                    const ly = g.py * scaleY - data.h/2;
+                    minX = Math.min(minX, lx); maxX = Math.max(maxX, lx + scaleX);
+                    minY = Math.min(minY, ly); maxY = Math.max(maxY, ly + scaleY);
+                });
+                if (minX === Infinity) return { min: { x: -data.w/2, y: -data.h/2 }, max: { x: data.w/2, y: data.h/2 } };
+                return { min: { x: minX, y: minY }, max: { x: maxX, y: maxY } };
+            })();
+
+            const spritePart = Bodies.rectangle(
+                (spriteBounds.min.x + spriteBounds.max.x) / 2,
+                (spriteBounds.min.y + spriteBounds.max.y) / 2,
+                spriteBounds.max.x - spriteBounds.min.x,
+                spriteBounds.max.y - spriteBounds.min.y,
+                {
+                    isSensor: true,
+                    density: 0.00001,
+                    render: {
+                        sprite: { texture: data.img, xScale: data.w/144, yScale: data.h/144 }
+                    }
                 }
-            });
-            parts.push(dummyPart);
+            );
+            parts.push(spritePart);
             
             animal = Body.create({
                 parts: parts, isStatic: isStatic, friction: 0.5, restitution: 0.1, angle: angle,
@@ -570,6 +605,8 @@
     function spawnNextAnimal() {
         let type = Math.floor(Math.random() * ANIMAL_DATA.length);
         currentAnimal = spawnAnimal(type, 0, -200, 0, true);
+        // スコア集計のため、配置したプレイヤーのロールを記録
+        if (currentAnimal) currentAnimal.ownerRole = myRole;
         isDropping = false;
     }
 
@@ -605,20 +642,45 @@
     }
 
     // --- Input Handling ---
+    // レターボックス（画面アスペクト比とゲーム画面の比が異なる場合）に対応した
+    // スクリプト座標系 -> ゲーム座標系の等倍変換
+    function screenToGame(clientX, clientY) {
+        const rect = render.canvas.getBoundingClientRect();
+        // object-fit: contain によるレターボックスの余白を補正
+        const canvasAspect = render.canvas.width / render.canvas.height;
+        const boxAspect = rect.width / rect.height;
+        let offX = 0, offY = 0, drawW = rect.width, drawH = rect.height;
+        if (boxAspect > canvasAspect) {
+            // 左右に余白（pillarbox）
+            drawH = rect.width / canvasAspect;
+            offY = (rect.height - drawH) / 2;
+        } else {
+            // 上下に余白（letterbox）
+            drawW = rect.height * canvasAspect;
+            offX = (rect.width - drawW) / 2;
+        }
+        // スクリーン -> キャンバスピクセル -> 論理座標（X: -500〜500, Y: -500〜700）
+        const px = (clientX - rect.left - offX) * (render.canvas.width / drawW);
+        const py = (clientY - rect.top - offY) * (render.canvas.height / drawH);
+        return { x: px - 500, y: py - 500 };
+    }
+
     function getMousePos(e) {
         if (e && e.clientX !== undefined) {
-            const rect = render.canvas.getBoundingClientRect();
-            const scaleX = render.canvas.width / rect.width;
-            const scaleY = render.canvas.height / rect.height;
-            return {
-                x: (e.clientX - rect.left) * scaleX - 500,
-                y: (e.clientY - rect.top) * scaleY - 500
-            };
+            return screenToGame(e.clientX, e.clientY);
         }
         return {
             x: matterMouse.position.x - 500,
             y: matterMouse.position.y - 500
         };
+    }
+
+    // タッチ座標 -> マウス座標相当に変換（座標変換は共用関数で行う）
+    function touchToMouseEvent(e) {
+        const t = e.touches && e.touches.length > 0 ? e.touches[0] :
+                  (e.changedTouches && e.changedTouches.length > 0 ? e.changedTouches[0] : null);
+        if (!t) return null;
+        return { clientX: t.clientX, clientY: t.clientY, button: 0 };
     }
 
     window.addEventListener('mousedown', (e) => {
@@ -657,7 +719,47 @@
             startPoint = null; tempBody = null;
         }
     });
-    
+
+    // タッチ操作: マウスクリック/リリースと同じアクションに対応
+    window.addEventListener('touchstart', (e) => {
+        const me = touchToMouseEvent(e);
+        if (!me) return;
+        e.preventDefault();
+        if (gameState === 'editor') {
+            startPoint = getMousePos(me);
+        } else if (gameState === 'playing' && currentAnimal && !isDropping && myRole === currentTurnRole) {
+            dropAnimal();
+        }
+    }, { passive: false });
+
+    window.addEventListener('touchmove', (e) => {
+        const me = touchToMouseEvent(e);
+        if (!me) return;
+        e.preventDefault();
+        if (gameState === 'editor' && startPoint) {
+            if (tempBody) Composite.remove(world, tempBody);
+            const pos = getMousePos(me);
+            const w = Math.abs(pos.x - startPoint.x), h = Math.abs(pos.y - startPoint.y);
+            tempBody = Bodies.rectangle((pos.x + startPoint.x)/2, (pos.y + startPoint.y)/2, Math.max(w,5), Math.max(h,5), { isStatic: true, render: { fillStyle: 'rgba(85,107,47,0.5)' } });
+            Composite.add(world, tempBody);
+        } else if (gameState === 'playing' && currentAnimal && !isDropping && myRole === currentTurnRole) {
+            const pos = getMousePos(me);
+            Body.setPosition(currentAnimal, { x: pos.x, y: pos.y });
+        }
+    }, { passive: false });
+
+    window.addEventListener('touchend', (e) => {
+        const me = touchToMouseEvent(e);
+        if (!me) return;
+        if (gameState === 'editor' && startPoint) {
+            const pos = getMousePos(me);
+            if (tempBody) Composite.remove(world, tempBody);
+            const w = Math.abs(pos.x - startPoint.x), h = Math.abs(pos.y - startPoint.y);
+            if (w > 10 && h > 10) createPlatform((pos.x + startPoint.x)/2, (pos.y + startPoint.y)/2, w, h);
+            startPoint = null; tempBody = null;
+        }
+    });
+
     window.addEventListener('contextmenu', (e) => e.preventDefault());
 
     function dropAnimal() {
@@ -671,7 +773,8 @@
         const data = ANIMAL_DATA[currentAnimal.animalType];
         if (data) Body.setMass(currentAnimal, data.mass);
         
-        socket.emit('sync_state', { action: 'start_timer' });
+        // ペイロードに duration を含めて送信（サーバー側で検証される）
+        socket.emit('start_timer', { duration: 5 });
         startCountdown(true);
     }
 
