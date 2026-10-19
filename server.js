@@ -2,6 +2,7 @@ const express = require('express');
 const http = require('http');
 const { Server } = require('socket.io');
 const path = require('path');
+const crypto = require('crypto');
 
 const app = express();
 const server = http.createServer(app);
@@ -17,10 +18,23 @@ const RECONNECT_GRACE_MS = 30000;         // #5 (HIGH): 30s to reconnect, then e
 const RATE_LIMIT_MAX = 10;                // #9 (MEDIUM): max game events per second per socket
 const RATE_LIMIT_WINDOW_MS = 1000;
 const SYNC_MAX_AHEAD = 300;               // #6 (HIGH): tolerate small network skew, beyond that = desync
+const REJOIN_TOKEN_TTL_MS = 30000;        // S1 (HIGH): rejoin tokens expire after 30s (reissued on rejoin)
+const REJOIN_RATE_MAX = 5;                // S1 (HIGH): max rejoin attempts per socket per window
+const REJOIN_RATE_WINDOW_MS = 30000;
+const ROOM_OP_RATE_MAX = 10;              // S3 (MEDIUM): max create/join/get_rooms per socket per window
+const ROOM_OP_RATE_WINDOW_MS = 30000;
+const SYNC_STALE_MS = 15000;              // H2 (HIGH): active player silent for 15s on their turn = game over
 
 // rooms: { roomId: { host, guest, state: 'waiting'|'playing', turn: 'host'|'guest',
-//   stageData, unitCounts: {host, guest}, scores, syncSeq: {host, guest}, disconnectedSince, endTimer } }
+//   stageData, unitCounts: {host, guest}, scores, syncSeq: {host, guest}, disconnectedSince, endTimer,
+//   rejoinTokens: {host: {hash, used, expiresAt}, guest: {...}}, lastSyncAt: {host, guest}, turnTimer } }
 let rooms = {};
+
+/** #S2 (MEDIUM): safe rooms lookup with own-property guard. */
+function getRoom(roomId) {
+    if (!roomId || typeof roomId !== 'string' || !Object.prototype.hasOwnProperty.call(rooms, roomId)) return null;
+    return rooms[roomId];
+}
 
 /** #3 (HIGH): verify socket belongs to the room (sender validation). */
 function roomOf(socket) {
@@ -86,9 +100,10 @@ function handleGameOver(socket, data) {
 }
 
 function cleanupRoom(roomId) {
-    const room = rooms[roomId];
+    const room = getRoom(roomId);
     if (!room) return;
     if (room.endTimer) { clearTimeout(room.endTimer); room.endTimer = null; }
+    if (room.turnTimer) { clearTimeout(room.turnTimer); room.turnTimer = null; } // M3/H2: clear server turn timer
     delete rooms[roomId];
 }
 
@@ -107,6 +122,90 @@ function rateLimitAllowed(socket) {
         return false;
     }
     return true;
+}
+
+/** S3 (MEDIUM): separate, stricter per-socket rate limiter for room-management
+ *  events (create_room / join_room / rejoin / get_rooms). Returns true if allowed. */
+function roomOpAllowed(socket) {
+    const now = Date.now();
+    if (now - (socket._roomOpStart || 0) >= ROOM_OP_RATE_WINDOW_MS) {
+        socket._roomOpStart = now;
+        socket._roomOpCount = 0;
+    }
+    socket._roomOpCount = (socket._roomOpCount || 0) + 1;
+    if (socket._roomOpCount > ROOM_OP_RATE_MAX) {
+        console.warn(`[rate-limit] room op ${socket._rateEvent || ''} from ${socket.id} exceeded ${ROOM_OP_RATE_MAX}/${ROOM_OP_RATE_WINDOW_MS}ms`);
+        return false;
+    }
+    return true;
+}
+
+/** S1 (HIGH): generate a single-use, expiring rejoin token. Only its hash is
+ *  stored on the room; the raw token is handed to the client once. */
+function issueRejoinToken(room, role) {
+    const token = crypto.randomBytes(16).toString('hex');
+    const entry = (room.rejoinTokens && room.rejoinTokens[role]) || {};
+    entry.hash = crypto.createHash('sha256').update(token).digest('hex');
+    entry.used = false;
+    entry.expiresAt = Date.now() + REJOIN_TOKEN_TTL_MS;
+    if (!room.rejoinTokens) room.rejoinTokens = {};
+    room.rejoinTokens[role] = entry;
+    return token;
+}
+
+/** S1 (HIGH): verify a presented rejoin token against the stored hash.
+ *  On success the token is marked used (single-use) and a fresh token is
+ *  returned so the reconnected client keeps a valid single-use token. */
+function verifyRejoinToken(room, role, token) {
+    const entry = room.rejoinTokens && room.rejoinTokens[role];
+    if (!entry) return null;
+    if (entry.used) return null;                              // single-use: already consumed
+    if (entry.expiresAt < Date.now()) return null;             // short expiry elapsed
+    const h = crypto.createHash('sha256').update(token).digest('hex');
+    if (h !== entry.hash) return null;                         // hash mismatch
+    entry.used = true;
+    return issueRejoinToken(room, role);                       // reissue a fresh single-use token
+}
+
+/** H2 (HIGH): dead-man's switch. If the active player stops sending sync_state
+ *  for SYNC_STALE_MS *after having sent at least one sync*, the server ends the
+ *  game. Only arms once the current turn's player has a sync baseline; calling it
+ *  when there is no baseline (e.g. right after a turn flip) is a safe no-op. */
+function scheduleTurnStaleCheck(roomId) {
+    const room = getRoom(roomId);
+    if (!room) return;
+    const turnRole = room.turn;
+    const lastSyncAt = room.lastSyncAt && room.lastSyncAt[turnRole] ? room.lastSyncAt[turnRole] : null;
+    if (!lastSyncAt) return; // no sync baseline for this turn yet; do not arm
+    const elapsed = Date.now() - lastSyncAt;
+    if (elapsed >= SYNC_STALE_MS) {
+        endGameForStaleSync(roomId, turnRole);
+        return;
+    }
+    if (room.turnTimer) { clearTimeout(room.turnTimer); room.turnTimer = null; }
+    room.turnTimer = setTimeout(() => endGameForStaleSync(roomId, turnRole), SYNC_STALE_MS - elapsed);
+}
+
+function endGameForStaleSync(roomId, turnRole) {
+    const room = getRoom(roomId);
+    if (!room || room.state !== 'playing') return;
+    if (room.turn !== turnRole) return; // turn already changed; a new timer covers it
+    if (room.turnTimer) { clearTimeout(room.turnTimer); room.turnTimer = null; }
+    console.log(`[turn-stale] ${turnRole} stopped sending sync_state for ${SYNC_STALE_MS}ms on their turn; ending game in ${roomId}`);
+    const winnerRole = turnRole === 'host' ? 'guest' : 'host';
+    const winnerId = winnerRole === 'host' ? room.host : room.guest;
+    if (winnerId && io.sockets.sockets.get(winnerId)) {
+        io.to(roomId).emit('game_over', {
+            loser: turnRole,
+            winner: winnerRole,
+            loserId: turnRole === 'host' ? room.host : room.guest,
+            winnerId: winnerId,
+            scores: room.scores,
+            reason: 'turn_stale'
+        });
+    }
+    cleanupRoom(roomId);
+    io.emit('rooms_updated');
 }
 
 // Wrap a game event handler with: room check (#3) + rate limit (#9) + role capture.
@@ -132,19 +231,24 @@ io.on('connection', (socket) => {
     socket.currentRoom = null;
     socket.role = null;
     socket.playerToken = null;   // #8: stable identity across reconnects
+    if (socket.data) socket.data.lastSyncAt = null; // H2: per-socket high-frequency last-sync marker
 
-    // Get rooms
+    // Get rooms (S3: rate-limited)
     socket.on('get_rooms', (callback) => {
         if (typeof callback !== 'function') return;
+        socket._rateEvent = 'get_rooms';
+        if (!roomOpAllowed(socket)) return; // S3
         const availableRooms = Object.keys(rooms)
-            .filter(id => rooms[id].state === 'waiting')
+            .filter(id => rooms[id] && rooms[id].state === 'waiting')
             .map(id => ({ roomId: id, stageData: rooms[id].stageData }));
         callback(availableRooms);
     });
 
-    // Create room (Host finishes editing stage)
+    // Create room (Host finishes editing stage) (S3: rate-limited)
     socket.on('create_room', (stageData, callback) => {
         if (typeof callback !== 'function') callback = () => {};
+        socket._rateEvent = 'create_room';
+        if (!roomOpAllowed(socket)) { callback({ error: 'Rate limited' }); return; } // S3
         // 既に部屋にいる場合はエラー
         if (socket.currentRoom && rooms[socket.currentRoom]) {
             callback({ error: 'Already in a room' });
@@ -163,9 +267,10 @@ io.on('connection', (socket) => {
         }
 
         // ユニークなroomIdを生成（衝突防止）
+        // L1: use crypto.randomBytes(8) hex for room IDs (unpredictable).
         let roomId;
         do {
-            roomId = 'room_' + Math.random().toString(36).substr(2, 9);
+            roomId = 'room_' + crypto.randomBytes(8).toString('hex');
         } while (rooms[roomId]);
 
         rooms[roomId] = {
@@ -174,21 +279,27 @@ io.on('connection', (socket) => {
             unitCounts: { host: null, guest: null },
             scores: { host: null, guest: null },
             syncSeq: { host: 0, guest: 0 },
-            disconnectedSince: null, endTimer: null
+            disconnectedSince: null, endTimer: null,
+            towers: { host: 0, guest: 0 },               // H2: server-owned tower counts
+            lastSyncAt: { host: null, guest: null },     // H2: dead-man's switch
+            turnTimer: null,                             // M3: server-owned turn timer
+            rejoinTokens: {}                             // S1: single-use rejoin token hashes
         };
-        // #8: hand the client a stable rejoin token (roomId:role) it can present on reconnect.
-        socket.playerToken = roomId + ':host';
+        // S1: hand the client a single-use, expiring rejoin token (hash stored on the room).
+        const hostToken = issueRejoinToken(rooms[roomId], 'host');
         socket.join(roomId);
         socket.currentRoom = roomId;
         socket.role = 'host';
-        callback({ roomId, token: socket.playerToken });
+        callback({ roomId, token: hostToken });
 
         io.emit('rooms_updated');
     });
 
-    // Join room (Guest)
+    // Join room (Guest) (S3: rate-limited)
     socket.on('join_room', (roomId, callback) => {
         if (typeof callback !== 'function') callback = () => {};
+        socket._rateEvent = 'join_room';
+        if (!roomOpAllowed(socket)) { callback({ success: false, message: 'Rate limited' }); return; } // S3
         const room = rooms[roomId];
         if (room && room.state === 'waiting') {
             room.guest = socket.id;
@@ -197,8 +308,9 @@ io.on('connection', (socket) => {
             socket.join(roomId);
             socket.currentRoom = roomId;
             socket.role = 'guest';
-            socket.playerToken = roomId + ':guest';
-            callback({ success: true, stageData: room.stageData, token: socket.playerToken });
+            // S1: single-use, expiring rejoin token (hash stored on the room).
+            const guestToken = issueRejoinToken(room, 'guest');
+            callback({ success: true, stageData: room.stageData, token: guestToken });
 
             // Notify host that guest joined and game started
             io.to(room.host).emit('game_started', { guestId: socket.id });
@@ -212,63 +324,86 @@ io.on('connection', (socket) => {
     });
 
     // #8 (MEDIUM): Rejoin after socket reconnect.
-    // Client sends { token } where token was issued at create_room/join_room.
-    // Server restores the socket into the room (same player identity).
+    // S1: token is single-use and short-expiring; only its SHA-256 hash is stored.
+    // S3: rate-limited separately from gameplay events.
+    // Client sends { token } where token was issued at create_room/join_room (or a rejoin).
     socket.on('rejoin', (data, callback) => {
         if (typeof callback !== 'function') callback = () => {};
+        socket._rateEvent = 'rejoin';
+        if (!roomOpAllowed(socket)) { callback({ success: false, message: 'Rate limited' }); return; } // S3
         if (!data || typeof data.token !== 'string' || !data.token) {
             callback({ success: false, message: 'Invalid token' });
             return;
         }
-        // token format: "roomId:role"
-        const sep = data.token.indexOf(':');
-        if (sep < 0) { callback({ success: false, message: 'Invalid token' }); return; }
-        const tokenRoomId = data.token.slice(0, sep);
-        const tokenRole = data.token.slice(sep + 1);
-        const room = rooms[tokenRoomId];
-        const otherRole = tokenRole === 'host' ? 'guest' : 'host';
+        // The token is a bare opaque string (S1); it no longer encodes roomId:role,
+        // so the room is resolved by matching the token hash against stored entries.
+        const token = data.token;
+        const tokenHash = crypto.createHash('sha256').update(token).digest('hex');
+        let roomId = null;
+        let tokenRole = null;
+        for (const id of Object.keys(rooms)) {
+            const r = rooms[id];
+            if (!r || !r.rejoinTokens) continue;
+            if (r.rejoinTokens.host && r.rejoinTokens.host.hash === tokenHash) { roomId = id; tokenRole = 'host'; break; }
+            if (r.rejoinTokens.guest && r.rejoinTokens.guest.hash === tokenHash) { roomId = id; tokenRole = 'guest'; break; }
+        }
+        if (!roomId || !tokenRole) { callback({ success: false, message: 'Room gone' }); return; }
+        const room = getRoom(roomId);
         if (!room) { callback({ success: false, message: 'Room gone' }); return; }
-        // Only allow rejoin into the slot the token was issued for.
-        if (tokenRole !== 'host' && tokenRole !== 'guest') {
-            callback({ success: false, message: 'Invalid role' }); return;
+        const otherRole = tokenRole === 'host' ? 'guest' : 'host';
+        // S1: verify the token against the stored hash; single-use + short expiry enforced.
+        const newToken = verifyRejoinToken(room, tokenRole, token);
+        if (!newToken) {
+            console.warn(`[rejoin] ${socket.id} presented invalid/used/expired token for ${tokenRole} in ${roomId}`);
+            callback({ success: false, message: 'Invalid token' });
+            return;
         }
         // Replace the stale (null) slot with the new socket id so subsequent events validate.
         room[tokenRole] = socket.id;
         // Stop any running grace timer (this player is back).
         if (room.endTimer) { clearTimeout(room.endTimer); room.endTimer = null; }
-        // Re-arm the grace timer if the *other* player is still missing.
-        const otherSocketAfter = io.sockets.sockets.get(otherRole === 'host' ? room.host : room.guest);
-        if (!otherSocketAfter) {
-            scheduleGrace(room, room.disconnectedSince && room.disconnectedSince.role !== otherRole ? room.disconnectedSince.role : otherRole);
+        // M6: simplified re-arming — if the *other* slot is absent, always scheduleGrace.
+        const otherIdAfter = otherRole === 'host' ? room.host : room.guest;
+        if (!otherIdAfter || !io.sockets.sockets.get(otherIdAfter)) {
+            scheduleGrace(room, otherRole);
         } else {
             room.disconnectedSince = null;
         }
         // Leave any old room this socket was in (shouldn't normally be in one, but be safe).
-        if (socket.currentRoom && socket.currentRoom !== tokenRoomId) {
+        if (socket.currentRoom && socket.currentRoom !== roomId) {
             try { socket.leave(socket.currentRoom); } catch (e) {}
         }
-        socket.join(tokenRoomId);
-        socket.currentRoom = tokenRoomId;
+        socket.join(roomId);
+        socket.currentRoom = roomId;
         socket.role = tokenRole;
-        socket.playerToken = data.token;
 
-        // Restore state: stage data, unit counts, scores, current turn, sync seq.
+        // Restore state: stage data, unit counts, tower counts (M7), scores, current turn, sync seq.
         const payload = {
             success: true,
             stageData: room.stageData,
             turn: room.turn,
             unitCounts: room.unitCounts,
+            towerCount: room.towers ? room.towers[tokenRole] : 0,  // M7: my tower count
             scores: room.scores,
             lastSyncSeq: room.syncSeq[tokenRole], // last seq the server accepted from this player
-            opponentPresent: !!io.sockets.sockets.get(otherRole === 'host' ? room.host : room.guest)
+            opponentPresent: !!io.sockets.sockets.get(otherIdAfter),
+            token: newToken   // S1: fresh single-use token for the next reconnect
         };
         callback(payload);
         // Tell the opponent the player is back.
-        const otherId = tokenRole === 'host' ? room.guest : room.host;
-        if (otherId && io.sockets.sockets.get(otherId)) {
-            io.to(otherId).emit('opponent_reconnected', { role: tokenRole });
+        if (otherIdAfter && io.sockets.sockets.get(otherIdAfter)) {
+            io.to(otherIdAfter).emit('opponent_reconnected', { role: tokenRole });
         }
-        console.log(`[rejoin] ${socket.id} rejoined ${tokenRoomId} as ${tokenRole}`);
+        // M5: ask the active player to re-broadcast a full sync_state snapshot
+        // so the returning player gets a fresh authoritative board.
+        const activeId = room.turn === 'host' ? room.host : room.guest;
+        if (activeId && io.sockets.sockets.get(activeId)) {
+            io.to(activeId).emit('request_sync_snapshot', {});
+        }
+        // H2: reset the dead-man's-switch window for the returning player's next turn.
+        room.lastSyncAt[tokenRole] = null;
+        if (room.turnTimer) { clearTimeout(room.turnTimer); room.turnTimer = null; }
+        console.log(`[rejoin] ${socket.id} rejoined ${roomId} as ${tokenRole}`);
     });
 
     // Sync physics state (High frequency)
@@ -279,6 +414,12 @@ io.on('connection', (socket) => {
         // ペイロード検証
         if (!data || !Array.isArray(data.animals)) return;
         const myRole = roleOf(socket, room);
+        // M2: only the active player (whose turn it is) may broadcast physics sync.
+        if (myRole !== room.turn) return;
+        // H2: dead-man's switch — record when the active player last synced.
+        if (socket.data) socket.data.lastSyncAt = Date.now();
+        if (!room.lastSyncAt) room.lastSyncAt = { host: null, guest: null };
+        room.lastSyncAt[myRole] = Date.now();
         const seq = data.seq;
         // seq must be an integer. Tolerate up to SYNC_MAX_AHEAD ahead of the server's view,
         // reject anything older than what the server has already accepted (duplicate / out-of-order).
@@ -311,6 +452,9 @@ io.on('connection', (socket) => {
         room.turn = (room.turn === 'host') ? 'guest' : 'host';
         // Send complete stable stage data to sync perfectly before new turn
         io.to(roomId).emit('turn_passed', { nextTurn: room.turn, stageData: data && data.stageData ? data.stageData : null });
+        // M3: the server now owns the turn timer — arm it for the new active player
+        // so a stalled turn is detected and the game is ended server-side.
+        scheduleTurnStaleCheck(roomId);
     }));
 
     // Start Timer Sync
@@ -323,6 +467,21 @@ io.on('connection', (socket) => {
         }
         const myRole = roleOf(socket, room);
         if (myRole !== room.turn) return; // only the active player can start the timer
+        // M3: server owns the turn timer. Flip the turn server-side after `duration`
+        // seconds and broadcast turn_passed (with the stage data for the snapshot).
+        const durationSec = Number.isFinite(data.duration) ? Math.max(0, data.duration) : 5;
+        if (room.turnTimer) { clearTimeout(room.turnTimer); room.turnTimer = null; }
+        room.turnTimer = setTimeout(() => {
+            const r = getRoom(roomId);
+            if (!r || r.state !== 'playing') return;
+            if (r.turnTimer) { clearTimeout(r.turnTimer); r.turnTimer = null; }
+            const previousTurn = r.turn;
+            r.turn = (r.turn === 'host') ? 'guest' : 'host';
+            io.to(roomId).emit('turn_passed', { nextTurn: r.turn, stageData: null, from: previousTurn, timed: true });
+            // H2: arm the dead-man's switch for the new active player.
+            scheduleTurnStaleCheck(roomId);
+        }, durationSec * 1000);
+        // Also notify the opponent to show its local countdown (cosmetic).
         socket.to(roomId).emit('start_timer', data);
     }));
 
@@ -332,8 +491,8 @@ io.on('connection', (socket) => {
         if (!data || typeof data !== 'object') return;
         if (typeof data.tx !== 'number' || !Number.isFinite(data.tx)) return;
         if (typeof data.ty !== 'number' || !Number.isFinite(data.ty)) return;
+        // H2: server-owned tower count (initialized at room creation, defensive here).
         if (!room.towers) room.towers = { host: 0, guest: 0 };
-        if (!room.towerData) room.towerData = { host: [], guest: [] };
         if (room.towers[myRole] >= MAX_TOWERS_PER_PLAYER) {
             socket.emit('place_tower_rejected', { reason: 'max_towers' });
             return;
@@ -396,6 +555,10 @@ io.on('connection', (socket) => {
 
         // #5: remove the stale socket id from room state so roomOf() rejects it.
         room[myRole] = null;
+        // H2: the disconnected player can no longer sync; reset their dead-man's window
+        // and cancel any pending turn timer for them.
+        if (room.lastSyncAt) room.lastSyncAt[myRole] = null;
+        if (room.turnTimer) { clearTimeout(room.turnTimer); room.turnTimer = null; }
 
         const otherPresent = otherId && io.sockets.sockets.get(otherId);
 
