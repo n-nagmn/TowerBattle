@@ -244,6 +244,9 @@
                 const scores = {};
                 scores[myRole] = myScore;
                 scores[myRole === 'host' ? 'guest' : 'host'] = oppScore;
+                // Round-4 #2/#4: report our own (0) unit count so the server can
+                // verify the defeat server-side instead of trusting the loser claim.
+                socket.emit('unit_count', { count: 0 });
                 socket.emit('game_over', { scores: scores });
                 break;
             }
@@ -264,9 +267,66 @@
     let tempBody = null;
     let syncInterval = null;
     let dropTimerInterval = null;
+    // Round-4 #8: stable rejoin token issued by the server on create_room / join_room.
+    let rejoinToken = null;
+    // Round-4 #8: remember we were mid-game so an auto-reconnect can rejoin instead of reset.
+    let lastGameRoomId = null;
+    // Round-4 #6: per-player sequence number for sync_state (server rejects duplicates/out-of-order).
+    let syncSeq = 0;
 
     // --- Socket.IO Setup ---
-    const socket = io('http://172.23.72.107:3008');
+    // Round-4 #8: enable auto-reconnect; a 'reconnect' listener below performs the rejoin.
+    const socket = io('http://172.23.72.107:3008', {
+        reconnection: true,
+        reconnectionAttempts: Infinity,
+        reconnectionDelay: 1000,
+        reconnectionDelayMax: 5000,
+        randomizationFactor: 0.5,
+        timeout: 20000
+    });
+
+    // Round-4 #8: after a network drop, rejoin the in-progress game with our token.
+    socket.on('reconnect', (reconnectAttempts) => {
+        if (!rejoinToken) return; // nothing to rejoin (fresh session or already reset)
+        socket.emit('rejoin', { token: rejoinToken }, (res) => {
+            if (res && res.success) {
+                // Restore local state from the server. The server also echoes the
+                // token, so the role is the part after the last ':'.
+                myRole = rejoinToken.split(':').pop();
+                if (res.turn) currentTurnRole = res.turn;
+                if (res.stageData) syncStageState(res.stageData);
+                if (typeof res.lastSyncSeq === 'number') syncSeq = res.lastSyncSeq;
+                // If it is our turn, resume sending physics sync.
+                if (gameState === 'playing' && myRole === currentTurnRole) startPhysicsSync();
+                if (gameState === 'playing') updateStatusBar();
+                showNotification('再接続しました');
+                console.log(`[rejoin] ok after ${reconnectAttempts} attempt(s)`);
+            } else {
+                // Room is gone (opponent timed us out, or game ended). Reset to title.
+                console.warn('[rejoin] failed:', res && res.message);
+                rejoinToken = null;
+                lastGameRoomId = null;
+                showScreen('title');
+            }
+        });
+    });
+
+    // Round-4 #8: if the socket drops, tell the user we are reconnecting (do not reset the game).
+    socket.on('disconnect', (reason) => {
+        console.warn('[socket] disconnected:', reason);
+        if (gameState === 'playing' || gameState === 'lobby') {
+            showNotification('接続が切断されました。再接続中...');
+        }
+        // Stop local timers while offline; they will be resumed on reconnect.
+        stopPhysicsSync();
+        if (dropTimerInterval) { clearInterval(dropTimerInterval); dropTimerInterval = null; }
+    });
+
+    socket.on('opponent_reconnected', (data) => {
+        if (gameState === 'playing' || gameState === 'lobby') {
+            showNotification('対戦相手が再接続しました');
+        }
+    });
 
     socket.on('rooms_updated', () => {
         if(gameState === 'rooms') fetchRooms();
@@ -275,6 +335,10 @@
     socket.on('game_started', (data) => {
         isGameOverEmitted = false;
         showScreen('playing');
+        // Round-4 #8: keep the room id so we can rejoin if the socket drops mid-game.
+        if (rejoinToken && rejoinToken.indexOf('room_') === 0) {
+            lastGameRoomId = rejoinToken.split(':')[0];
+        }
         // ホストはguestIdを受け取り、ゲストはhostIdを受け取る
         if (data.guestId) {
             // ホスト側の処理
@@ -347,14 +411,21 @@
     socket.on('game_over', (data) => {
         if (gameState !== 'playing') return;
         stopPhysicsSync();
-        const iWin = (data.loser !== socket.id);
+        // Round-4 #2/#4: the server now sends the winner as a ROLE ('host'|'guest'),
+        // and the loser as a socket id for backward compatibility. Trust the role.
+        const iWin = (data.winner === myRole);
         showResult(iWin);
+        // Round-4 #8: the game is over; we can no longer rejoin this room.
+        rejoinToken = null;
+        lastGameRoomId = null;
     });
 
-    socket.on('opponent_disconnected', () => {
+    socket.on('opponent_disconnected', (data) => {
         if (gameState === 'playing' || gameState === 'lobby') {
-            showNotification('対戦相手が切断しました。タイトルに戻ります。');
-            showScreen('title');
+            // Round-4 #5: the opponent left, but the server keeps the room for 30s
+            // (they may reconnect). Do not reset; wait for either their
+            // 'opponent_reconnected' event or a server-issued game_over (timeout).
+            showNotification('対戦相手が切断しました。復帰を待っています...');
         }
     });
 
@@ -369,6 +440,48 @@
     });
 
     // --- Core Functions ---
+
+    // Round-4 #10: validate tower placement coordinates before sending.
+    // Game coordinate system: X -500..500, Y -500..700 (see Render.lookAt / screenToGame).
+    function isValidTowerCoord(tx, ty) {
+        return Number.isFinite(tx) && Number.isFinite(ty)
+            && Number.isInteger(tx) && Number.isInteger(ty)
+            && tx >= -500 && tx <= 500
+            && ty >= -500 && ty <= 700;
+    }
+
+    // Round-4 #7: client-side mirror of the server's per-player tower limit.
+    const MAX_TOWERS_PER_PLAYER = 5;
+    let myTowerCount = 0;
+
+    function tryPlaceTower(tx, ty) {
+        if (gameState !== 'playing' || myRole !== currentTurnRole) return;
+        // Round-4 #10: reject invalid coordinates before they hit the wire.
+        if (!isValidTowerCoord(tx, ty)) {
+            showNotification('無効な配置位置です');
+            return;
+        }
+        // Round-4 #7: enforce the per-player limit locally (server enforces it too).
+        if (myTowerCount >= MAX_TOWERS_PER_PLAYER) {
+            showNotification('タワーの配置上限に達しました');
+            return;
+        }
+        socket.emit('place_tower', { tx, ty });
+    }
+
+    socket.on('tower_placed', (data) => {
+        // Server accepted the placement (our own or the opponent's).
+        // Update the local count when it is our own tower.
+        if (data && data.role === myRole && typeof data.count === 'number') {
+            myTowerCount = data.count;
+        }
+    });
+
+    socket.on('place_tower_rejected', (data) => {
+        if (data && data.reason === 'max_towers') {
+            showNotification('タワーの配置上限に達しました');
+        }
+    });
 
     function startCountdown(isActivePlayer) {
         let timeLeft = 5;
@@ -415,6 +528,10 @@
         if (screen === 'title') {
             document.getElementById('title-screen').style.display = 'flex';
             clearPhysics();
+            // Round-4 #8: clear rejoin state so a fresh title screen does not
+            // try to rejoin an old room after an auto-reconnect.
+            rejoinToken = null;
+            lastGameRoomId = null;
             if(socket.currentRoom) socket.disconnect(); // 一度切断して再接続(初期化)
             socket.connect();
         } else if (screen === 'editor') {
@@ -441,6 +558,8 @@
         stopPhysicsSync();
         if(dropTimerInterval) clearInterval(dropTimerInterval);
         document.getElementById('countdown-timer').style.display = 'none';
+        // Round-4 #6: reset the sync sequence when the board is cleared (new game).
+        syncSeq = 0;
     }
 
     function fetchRooms() {
@@ -470,6 +589,9 @@
                             myRole = 'guest';
                             clearPhysics();
                             syncStageState(res.stageData);
+                            // Round-4 #8: store the rejoin token the server handed us.
+                            if (res.token) rejoinToken = res.token;
+                            myTowerCount = 0;
                             showScreen('lobby'); // すぐにgame_startedイベントが来るはず
                         } else {
                             showNotification(res.message);
@@ -633,7 +755,9 @@
                 type: b.animalType, x: b.position.x, y: b.position.y, angle: b.angle,
                 vx: b.velocity.x, vy: b.velocity.y, vangle: b.angularVelocity
             }));
-            socket.emit('sync_state', { animals: animalsData });
+            // Round-4 #6: attach a monotonically increasing sequence number.
+            // The server drops duplicates / out-of-order frames to prevent index desync.
+            socket.emit('sync_state', { animals: animalsData, seq: ++syncSeq });
         }, 1000 / 30); // 30fps で同期
     }
 
@@ -791,7 +915,14 @@
     document.getElementById('btn-goto-guest').onclick = () => showScreen('rooms');
     document.getElementById('btn-start-recruit').onclick = () => {
         myRole = 'host';
-        socket.emit('create_room', { platforms: platforms }, () => {
+        // Round-4 #10: validate all platform coordinates before they hit the wire.
+        const bad = platforms.some(p => !isValidTowerCoord(p.x, p.y));
+        if (bad) { showNotification('ステージ座標が無効です'); return; }
+        socket.emit('create_room', { platforms: platforms }, (res) => {
+            // Server callback now returns { roomId, token } (round-4 #8).
+            if (res && res.error) { showNotification(res.error); return; }
+            if (res && res.token) rejoinToken = res.token;
+            myTowerCount = 0;
             showScreen('lobby');
         });
     };
@@ -800,6 +931,10 @@
     document.getElementById('btn-refresh-rooms').onclick = fetchRooms;
     document.getElementById('btn-cancel-rooms').onclick = () => showScreen('title');
     document.getElementById('btn-cancel-lobby').onclick = () => {
+        // Round-4 #8: drop the rejoin token first so the reconnect listener
+        // does not try to rejoin a room the player intentionally left.
+        rejoinToken = null;
+        lastGameRoomId = null;
         socket.disconnect(); // 部屋を消すために切断
         showScreen('title');
     };
