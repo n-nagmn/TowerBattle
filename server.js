@@ -6,7 +6,6 @@ const crypto = require('crypto');
 
 const app = express();
 const server = http.createServer(app);
-
 // Round-4 fix #1 (HIGH): same-origin app, do not allow cross-origin socket connections.
 const io = new Server(server, { cors: { origin: 'http://172.23.72.107' } });
 
