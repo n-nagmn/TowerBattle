@@ -79,9 +79,6 @@
             display: flex; align-items: center; justify-content: center;
         }
         canvas { max-width: 100%; max-height: 100%; object-fit: contain; aspect-ratio: 1000 / 1200; }
-        /* レターボックスでも描画がキャンバス全体にフィットするよう、
-           等倍スケーリングを維持してマウス座標変換を正確にする */
-        #canvas-container canvas { width: auto; height: auto; }
 
         #result-overlay {
             display: none; z-index: 100; background: rgba(0,0,0,0.5);
@@ -237,17 +234,7 @@
         for(let i=0; i<bodies.length; i++) {
             if (bodies[i].position.y > DEATH_Y) {
                 isGameOverEmitted = true;
-                // 最終スコア（各側の配置済み動物数）を添えて送信
-                const dropped = Composite.allBodies(world).filter(b => b.label === 'animal' && b !== currentAnimal);
-                const myScore = dropped.filter(b => b.ownerRole === myRole).length;
-                const oppScore = dropped.filter(b => b.ownerRole !== myRole).length;
-                const scores = {};
-                scores[myRole] = myScore;
-                scores[myRole === 'host' ? 'guest' : 'host'] = oppScore;
-                // Round-4 #2/#4: report our own (0) unit count so the server can
-                // verify the defeat server-side instead of trusting the loser claim.
-                socket.emit('unit_count', { count: 0 });
-                socket.emit('game_over', { scores: scores });
+                socket.emit('game_over');
                 break;
             }
         }
@@ -267,93 +254,9 @@
     let tempBody = null;
     let syncInterval = null;
     let dropTimerInterval = null;
-    // M1: stable per-animal ID counter so the receiver can match animals by ID.
-    let nextAnimalId = 1;
-    let nextRemoteAnimalId = 1;
-    // Round-4 #8: stable rejoin token issued by the server on create_room / join_room.
-    let rejoinToken = null;
-    // Round-4 #8: remember we were mid-game so an auto-reconnect can rejoin instead of reset.
-    let lastGameRoomId = null;
-    // Round-4 #6: per-player sequence number for sync_state (server rejects duplicates/out-of-order).
-    let syncSeq = 0;
 
     // --- Socket.IO Setup ---
-    // Round-4 #8: enable auto-reconnect; the `connect` listener below performs the rejoin.
-    const socket = io('http://172.23.72.107:3008', {
-        transports: ['websocket'],
-        reconnection: true,
-        reconnectionAttempts: Infinity,
-        reconnectionDelay: 1000,
-        reconnectionDelayMax: 5000,
-        randomizationFactor: 0.5,
-        timeout: 20000
-    });
-
-    // Socket.IO emits `connect` again after every successful reconnection.
-    // Its `reconnect` event belongs to the Manager (`socket.io`), not the Socket.
-    let hasConnectedOnce = false;
-    socket.on('connect', () => {
-        if (!hasConnectedOnce) {
-            hasConnectedOnce = true;
-            return;
-        }
-        if (!rejoinToken) return; // nothing to rejoin (fresh session or already reset)
-        socket.emit('rejoin', { token: rejoinToken }, (res) => {
-            if (res && res.success) {
-                // S1: the server reissues a fresh single-use token on each rejoin.
-                if (res.token) rejoinToken = res.token;
-                // S1: token no longer encodes the role; the server tells us the turn,
-                // and we recover our role from the rejoin (we know which socket is ours).
-                // Fall back to the slot we originally held if not derivable.
-                myRole = (myRole === 'host' || myRole === 'guest') ? myRole : 'host';
-                if (res.turn) currentTurnRole = res.turn;
-                if (res.stageData) syncStageState(res.stageData);
-                if (typeof res.lastSyncSeq === 'number') syncSeq = res.lastSyncSeq;
-                if (typeof res.towerCount === 'number') myTowerCount = res.towerCount; // M7
-                // If it is our turn, resume sending physics sync.
-                if (gameState === 'playing' && myRole === currentTurnRole) startPhysicsSync();
-                if (gameState === 'playing') updateStatusBar();
-                showNotification('再接続しました');
-                console.log(`[rejoin] ok after ${reconnectAttempts} attempt(s)`);
-            } else {
-                // Room is gone (opponent timed us out, or game ended). Reset to title.
-                console.warn('[rejoin] failed:', res && res.message);
-                rejoinToken = null;
-                lastGameRoomId = null;
-                showScreen('title');
-            }
-        });
-    });
-
-    // M5: server asks the active player to re-broadcast a full sync_state snapshot
-    // (e.g. when an opponent rejoined mid-turn) so they get a fresh authoritative board.
-    socket.on('request_sync_snapshot', () => {
-        if (gameState !== 'playing' || myRole !== currentTurnRole) return;
-        const bodies = Composite.allBodies(world).filter(b => b.label === 'animal');
-        const animalsData = bodies.map(b => ({
-            id: b.animalId,
-            type: b.animalType, x: b.position.x, y: b.position.y, angle: b.angle,
-            vx: b.velocity.x, vy: b.velocity.y, vangle: b.angularVelocity
-        }));
-        socket.emit('sync_state', { animals: animalsData, seq: ++syncSeq });
-    });
-
-    // Round-4 #8: if the socket drops, tell the user we are reconnecting (do not reset the game).
-    socket.on('disconnect', (reason) => {
-        console.warn('[socket] disconnected:', reason);
-        if (gameState === 'playing' || gameState === 'lobby') {
-            showNotification('接続が切断されました。再接続中...');
-        }
-        // Stop local timers while offline; they will be resumed on reconnect.
-        stopPhysicsSync();
-        if (dropTimerInterval) { clearInterval(dropTimerInterval); dropTimerInterval = null; }
-    });
-
-    socket.on('opponent_reconnected', (data) => {
-        if (gameState === 'playing' || gameState === 'lobby') {
-            showNotification('対戦相手が再接続しました');
-        }
-    });
+    const socket = io('http://172.23.72.107:3008');
 
     socket.on('rooms_updated', () => {
         if(gameState === 'rooms') fetchRooms();
@@ -362,32 +265,20 @@
     socket.on('game_started', (data) => {
         isGameOverEmitted = false;
         showScreen('playing');
-        // Round-4 #8: keep the room id so we can rejoin if the socket drops mid-game.
-        if (rejoinToken && rejoinToken.indexOf('room_') === 0) {
-            lastGameRoomId = rejoinToken.split(':')[0];
-        }
-        // ホストはguestIdを受け取り、ゲストはhostIdを受け取る
-        if (data.guestId) {
-            // ホスト側の処理
-            myRole = 'host';
+        if (myRole === 'host') {
             currentTurnRole = 'host';
             updateStatusBar();
             spawnNextAnimal();
             startPhysicsSync();
-        } else if (data.hostId) {
-            // ゲスト側の処理
-            myRole = 'guest';
-            currentTurnRole = 'host'; // 最初のターンはホスト
+        } else {
+            currentTurnRole = 'host';
             updateStatusBar();
         }
     });
 
     // 高速・完全同期で相手の物理演算状態を受信
     socket.on('sync_state', (data) => {
-        // ペイロード検証: animals配列が存在するか確認
-        if (!data || !Array.isArray(data.animals)) return;
-        
-        if (data.action === 'start_timer') {
+        if (data && data.action === 'start_timer') {
             if (gameState !== 'playing' || myRole === currentTurnRole) return;
             startCountdown(false);
             return;
@@ -397,32 +288,26 @@
         // 自分のエンジンで計算させないために、送られてきた座標で強制上書き
         const bodies = Composite.allBodies(world);
         const animalBodies = bodies.filter(b => b.label === 'animal');
-        // M1: build an id -> body map so we can match by stable ID (not index).
-        const byId = {};
-        animalBodies.forEach(b => { if (b.animalId !== undefined) byId[b.animalId] = b; });
-
-        const incomingIds = {};
-        data.animals.forEach(a => { if (a.id !== undefined) incomingIds[a.id] = true; });
-
-        // Remove local animals that are no longer present in the authoritative snapshot.
-        animalBodies.forEach(b => {
-            if (b.animalId === undefined || !incomingIds[b.animalId]) Composite.remove(world, b);
-        });
-
-        // M1: match by ID. Create missing ones (with the remote's id), update the rest.
-        data.animals.forEach(a => {
-            let b = a.id !== undefined ? byId[a.id] : null;
-            if (!b) {
-                b = spawnAnimal(a.type, a.x, a.y, a.angle, false, a.id);
-                if (!b) return;
-                // C1: record the owner role on the receiver side for rebuilt animals.
-                b.ownerRole = data.from;
+        
+        // もし数が違えば再構築
+        if (animalBodies.length !== data.animals.length) {
+            animalBodies.forEach(b => Composite.remove(world, b));
+            data.animals.forEach(a => {
+                const b = spawnAnimal(a.type, a.x, a.y, a.angle, false);
+                if (b) {
+                    Body.setVelocity(b, { x: a.vx || 0, y: a.vy || 0 });
+                    Body.setAngularVelocity(b, a.vangle || 0);
+                }
+            });
+        } else {
+            // 数が同じなら位置と角度だけ上書き
+            for(let i=0; i<animalBodies.length; i++) {
+                Body.setPosition(animalBodies[i], { x: data.animals[i].x, y: data.animals[i].y });
+                Body.setAngle(animalBodies[i], data.animals[i].angle);
+                Body.setVelocity(animalBodies[i], { x: data.animals[i].vx || 0, y: data.animals[i].vy || 0 });
+                Body.setAngularVelocity(animalBodies[i], data.animals[i].vangle || 0);
             }
-            Body.setPosition(b, { x: a.x, y: a.y });
-            Body.setAngle(b, a.angle);
-            Body.setVelocity(b, { x: a.vx || 0, y: a.vy || 0 });
-            Body.setAngularVelocity(b, a.vangle || 0);
-        });
+        }
     });
 
     socket.on('turn_passed', (data) => {
@@ -444,80 +329,23 @@
     socket.on('game_over', (data) => {
         if (gameState !== 'playing') return;
         stopPhysicsSync();
-        // Round-4 #2/#4: the server now sends the winner as a ROLE ('host'|'guest'),
-        // and the loser as a socket id for backward compatibility. Trust the role.
-        const iWin = (data.winner === myRole);
+        const iWin = (data.loser !== socket.id);
         showResult(iWin);
-        // L8: mark the game state as 'result' so physics sync / turn logic stops.
-        gameState = 'result';
-        document.getElementById('result-overlay').style.display = 'flex';
-        // Round-4 #8: the game is over; we can no longer rejoin this room.
-        rejoinToken = null;
-        lastGameRoomId = null;
     });
 
-    socket.on('opponent_disconnected', (data) => {
+    socket.on('opponent_disconnected', () => {
         if (gameState === 'playing' || gameState === 'lobby') {
-            // Round-4 #5: the opponent left, but the server keeps the room for 30s
-            // (they may reconnect). Do not reset; wait for either their
-            // 'opponent_reconnected' event or a server-issued game_over (timeout).
-            showNotification('対戦相手が切断しました。復帰を待っています...');
+            showNotification('対戦相手が切断しました。タイトルに戻ります。');
+            showScreen('title');
         }
     });
 
-    socket.on('start_timer', (data) => {
-        // ペイロード検証: duration フィールドが期待される
-        if (!data || typeof data !== 'object' || !('duration' in data)) {
-            console.warn('[start_timer] Invalid payload, ignoring:', data);
-            return;
-        }
+    socket.on('start_timer', () => {
         if (gameState !== 'playing' || myRole === currentTurnRole) return;
         startCountdown(false);
     });
 
     // --- Core Functions ---
-
-    // Round-4 #10: validate tower placement coordinates before sending.
-    // Game coordinate system: X -500..500, Y -500..700 (see Render.lookAt / screenToGame).
-    function isValidTowerCoord(tx, ty) {
-        return Number.isFinite(tx) && Number.isFinite(ty)
-            && Number.isInteger(tx) && Number.isInteger(ty)
-            && tx >= -500 && tx <= 500
-            && ty >= -500 && ty <= 700;
-    }
-
-    // Round-4 #7: client-side mirror of the server's per-player tower limit.
-    const MAX_TOWERS_PER_PLAYER = 5;
-    let myTowerCount = 0;
-
-    function tryPlaceTower(tx, ty) {
-        if (gameState !== 'playing' || myRole !== currentTurnRole) return;
-        // Round-4 #10: reject invalid coordinates before they hit the wire.
-        if (!isValidTowerCoord(tx, ty)) {
-            showNotification('無効な配置位置です');
-            return;
-        }
-        // Round-4 #7: enforce the per-player limit locally (server enforces it too).
-        if (myTowerCount >= MAX_TOWERS_PER_PLAYER) {
-            showNotification('タワーの配置上限に達しました');
-            return;
-        }
-        socket.emit('place_tower', { tx, ty });
-    }
-
-    socket.on('tower_placed', (data) => {
-        // Server accepted the placement (our own or the opponent's).
-        // Update the local count when it is our own tower.
-        if (data && data.role === myRole && typeof data.count === 'number') {
-            myTowerCount = data.count;
-        }
-    });
-
-    socket.on('place_tower_rejected', (data) => {
-        if (data && data.reason === 'max_towers') {
-            showNotification('タワーの配置上限に達しました');
-        }
-    });
 
     function startCountdown(isActivePlayer) {
         let timeLeft = 5;
@@ -535,10 +363,8 @@
                 timerEl.style.display = 'none';
                 if (isActivePlayer && !isGameOverEmitted) {
                     const animalsData = Composite.allBodies(world).filter(b => b.label === 'animal').map(b => ({
-                        id: b.animalId, // M1: stable per-animal id for receiver matching
                         type: b.animalType, x: b.position.x, y: b.position.y, angle: b.angle,
-                        vx: b.velocity.x, vy: b.velocity.y, vangle: b.angularVelocity,
-                        ownerRole: b.ownerRole // C1: carry owner so the receiver can restore it
+                        vx: b.velocity.x, vy: b.velocity.y, vangle: b.angularVelocity
                     }));
                     socket.emit('pass_turn', { stageData: { platforms: platforms, animals: animalsData } });
                     currentAnimal = null;
@@ -566,10 +392,6 @@
         if (screen === 'title') {
             document.getElementById('title-screen').style.display = 'flex';
             clearPhysics();
-            // Round-4 #8: clear rejoin state so a fresh title screen does not
-            // try to rejoin an old room after an auto-reconnect.
-            rejoinToken = null;
-            lastGameRoomId = null;
             if(socket.currentRoom) socket.disconnect(); // 一度切断して再接続(初期化)
             socket.connect();
         } else if (screen === 'editor') {
@@ -596,8 +418,6 @@
         stopPhysicsSync();
         if(dropTimerInterval) clearInterval(dropTimerInterval);
         document.getElementById('countdown-timer').style.display = 'none';
-        // Round-4 #6: reset the sync sequence when the board is cleared (new game).
-        syncSeq = 0;
     }
 
     function fetchRooms() {
@@ -627,9 +447,6 @@
                             myRole = 'guest';
                             clearPhysics();
                             syncStageState(res.stageData);
-                            // Round-4 #8: store the rejoin token the server handed us.
-                            if (res.token) rejoinToken = res.token;
-                            myTowerCount = 0;
                             showScreen('lobby'); // すぐにgame_startedイベントが来るはず
                         } else {
                             showNotification(res.message);
@@ -649,7 +466,7 @@
 
     const pixelGridCache = {};
 
-    function spawnAnimal(type, x, y, angle, isStatic, animalIdHint) {
+    function spawnAnimal(type, x, y, angle, isStatic) {
         const data = ANIMAL_DATA[type];
         if (!data) return null;
         const img = preloadedImages[data.name];
@@ -682,35 +499,15 @@
                 scaleX + 0.5, scaleY + 0.5, { render: { visible: false } }
             ));
             
-            // スプライト描画用センサーパーツ
-            // 画像の不透明ピクセルの境界框から作成することで、コンポジットの
-            // bounds / センサー判定が動物の全パーツ（頭・胴体・足）全体をカバーする
-            const spriteBounds = (function() {
-                let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-                grid.forEach(g => {
-                    const lx = g.px * scaleX - data.w/2;
-                    const ly = g.py * scaleY - data.h/2;
-                    minX = Math.min(minX, lx); maxX = Math.max(maxX, lx + scaleX);
-                    minY = Math.min(minY, ly); maxY = Math.max(maxY, ly + scaleY);
-                });
-                if (minX === Infinity) return { min: { x: -data.w/2, y: -data.h/2 }, max: { x: data.w/2, y: data.h/2 } };
-                return { min: { x: minX, y: minY }, max: { x: maxX, y: maxY } };
-            })();
-
-            const spritePart = Bodies.rectangle(
-                (spriteBounds.min.x + spriteBounds.max.x) / 2,
-                (spriteBounds.min.y + spriteBounds.max.y) / 2,
-                spriteBounds.max.x - spriteBounds.min.x,
-                spriteBounds.max.y - spriteBounds.min.y,
-                {
-                    isSensor: true,
-                    density: 0.00001,
-                    render: {
-                        sprite: { texture: data.img, xScale: data.w/144, yScale: data.h/144 }
-                    }
+            // Dummy part for rendering sprite
+            const dummyPart = Bodies.rectangle(0, 0, 1, 1, {
+                isSensor: true,
+                density: 0.00001,
+                render: {
+                    sprite: { texture: data.img, xScale: data.w/144, yScale: data.h/144 }
                 }
-            );
-            parts.push(spritePart);
+            });
+            parts.push(dummyPart);
             
             animal = Body.create({
                 parts: parts, isStatic: isStatic, friction: 0.5, restitution: 0.1, angle: angle,
@@ -731,16 +528,7 @@
             if (animal) Body.setMass(animal, data.mass);
         }
 
-        if (animal) {
-            // M1: give every spawned animal a stable ID so the receiver can match
-            // animals by ID instead of by array index.
-            if (animalIdHint !== undefined) {
-                animal.animalId = animalIdHint;
-            } else {
-                animal.animalId = nextAnimalId++;
-            }
-            Composite.add(world, animal);
-        }
+        if (animal) Composite.add(world, animal);
         return animal;
     }
 
@@ -759,11 +547,8 @@
             }
             if (stageData.animals) {
                 stageData.animals.forEach(a => {
-                    // M1: preserve the stable id when rebuilding from a snapshot.
-                    const newAnimal = spawnAnimal(a.type, a.x, a.y, a.angle, false, a.id);
+                    const newAnimal = spawnAnimal(a.type, a.x, a.y, a.angle, false);
                     if (newAnimal) {
-                        // C1: record the owner role on the receiver side.
-                        if (a.ownerRole) newAnimal.ownerRole = a.ownerRole;
                         Body.setPosition(newAnimal, { x: a.x, y: a.y });
                         Body.setAngle(newAnimal, a.angle);
                         Body.setVelocity(newAnimal, { x: a.vx || 0, y: a.vy || 0 });
@@ -777,8 +562,6 @@
     function spawnNextAnimal() {
         let type = Math.floor(Math.random() * ANIMAL_DATA.length);
         currentAnimal = spawnAnimal(type, 0, -200, 0, true);
-        // スコア集計のため、配置したプレイヤーのロールを記録
-        if (currentAnimal) currentAnimal.ownerRole = myRole;
         isDropping = false;
     }
 
@@ -802,15 +585,11 @@
             }
             const bodies = Composite.allBodies(world).filter(b => b.label === 'animal');
             const animalsData = bodies.map(b => ({
-                id: b.animalId, // M1: stable per-animal id for receiver matching
                 type: b.animalType, x: b.position.x, y: b.position.y, angle: b.angle,
-                vx: b.velocity.x, vy: b.velocity.y, vangle: b.angularVelocity,
-                ownerRole: b.ownerRole // C1: carry owner so the receiver can restore it
+                vx: b.velocity.x, vy: b.velocity.y, vangle: b.angularVelocity
             }));
-            // Round-4 #6: attach a monotonically increasing sequence number.
-            // The server drops duplicates / out-of-order frames to prevent index desync.
-            socket.emit('sync_state', { animals: animalsData, seq: ++syncSeq });
-        }, 1000 / 8); // サーバーのイベント上限（10/秒）を越えないよう同期
+            socket.emit('sync_state', { animals: animalsData });
+        }, 1000 / 30); // 30fps で同期
     }
 
     function stopPhysicsSync() {
@@ -818,45 +597,20 @@
     }
 
     // --- Input Handling ---
-    // レターボックス（画面アスペクト比とゲーム画面の比が異なる場合）に対応した
-    // スクリプト座標系 -> ゲーム座標系の等倍変換
-    function screenToGame(clientX, clientY) {
-        const rect = render.canvas.getBoundingClientRect();
-        // object-fit: contain によるレターボックスの余白を補正
-        const canvasAspect = render.canvas.width / render.canvas.height;
-        const boxAspect = rect.width / rect.height;
-        let offX = 0, offY = 0, drawW = rect.width, drawH = rect.height;
-        if (boxAspect > canvasAspect) {
-            // 左右に余白（pillarbox）
-            drawH = rect.width / canvasAspect;
-            offY = (rect.height - drawH) / 2;
-        } else {
-            // 上下に余白（letterbox）
-            drawW = rect.height * canvasAspect;
-            offX = (rect.width - drawW) / 2;
-        }
-        // スクリーン -> キャンバスピクセル -> 論理座標（X: -500〜500, Y: -500〜700）
-        const px = (clientX - rect.left - offX) * (render.canvas.width / drawW);
-        const py = (clientY - rect.top - offY) * (render.canvas.height / drawH);
-        return { x: px - 500, y: py - 500 };
-    }
-
     function getMousePos(e) {
         if (e && e.clientX !== undefined) {
-            return screenToGame(e.clientX, e.clientY);
+            const rect = render.canvas.getBoundingClientRect();
+            const scaleX = render.canvas.width / rect.width;
+            const scaleY = render.canvas.height / rect.height;
+            return {
+                x: (e.clientX - rect.left) * scaleX - 500,
+                y: (e.clientY - rect.top) * scaleY - 500
+            };
         }
         return {
             x: matterMouse.position.x - 500,
             y: matterMouse.position.y - 500
         };
-    }
-
-    // タッチ座標 -> マウス座標相当に変換（座標変換は共用関数で行う）
-    function touchToMouseEvent(e) {
-        const t = e.touches && e.touches.length > 0 ? e.touches[0] :
-                  (e.changedTouches && e.changedTouches.length > 0 ? e.changedTouches[0] : null);
-        if (!t) return null;
-        return { clientX: t.clientX, clientY: t.clientY, button: 0 };
     }
 
     window.addEventListener('mousedown', (e) => {
@@ -895,47 +649,7 @@
             startPoint = null; tempBody = null;
         }
     });
-
-    // タッチ操作: マウスクリック/リリースと同じアクションに対応
-    window.addEventListener('touchstart', (e) => {
-        const me = touchToMouseEvent(e);
-        if (!me) return;
-        e.preventDefault();
-        if (gameState === 'editor') {
-            startPoint = getMousePos(me);
-        } else if (gameState === 'playing' && currentAnimal && !isDropping && myRole === currentTurnRole) {
-            dropAnimal();
-        }
-    }, { passive: false });
-
-    window.addEventListener('touchmove', (e) => {
-        const me = touchToMouseEvent(e);
-        if (!me) return;
-        e.preventDefault();
-        if (gameState === 'editor' && startPoint) {
-            if (tempBody) Composite.remove(world, tempBody);
-            const pos = getMousePos(me);
-            const w = Math.abs(pos.x - startPoint.x), h = Math.abs(pos.y - startPoint.y);
-            tempBody = Bodies.rectangle((pos.x + startPoint.x)/2, (pos.y + startPoint.y)/2, Math.max(w,5), Math.max(h,5), { isStatic: true, render: { fillStyle: 'rgba(85,107,47,0.5)' } });
-            Composite.add(world, tempBody);
-        } else if (gameState === 'playing' && currentAnimal && !isDropping && myRole === currentTurnRole) {
-            const pos = getMousePos(me);
-            Body.setPosition(currentAnimal, { x: pos.x, y: pos.y });
-        }
-    }, { passive: false });
-
-    window.addEventListener('touchend', (e) => {
-        const me = touchToMouseEvent(e);
-        if (!me) return;
-        if (gameState === 'editor' && startPoint) {
-            const pos = getMousePos(me);
-            if (tempBody) Composite.remove(world, tempBody);
-            const w = Math.abs(pos.x - startPoint.x), h = Math.abs(pos.y - startPoint.y);
-            if (w > 10 && h > 10) createPlatform((pos.x + startPoint.x)/2, (pos.y + startPoint.y)/2, w, h);
-            startPoint = null; tempBody = null;
-        }
-    });
-
+    
     window.addEventListener('contextmenu', (e) => e.preventDefault());
 
     function dropAnimal() {
@@ -949,8 +663,7 @@
         const data = ANIMAL_DATA[currentAnimal.animalType];
         if (data) Body.setMass(currentAnimal, data.mass);
         
-        // ペイロードに duration を含めて送信（サーバー側で検証される）
-        socket.emit('start_timer', { duration: 5 });
+        socket.emit('sync_state', { action: 'start_timer' });
         startCountdown(true);
     }
 
@@ -967,14 +680,7 @@
     document.getElementById('btn-goto-guest').onclick = () => showScreen('rooms');
     document.getElementById('btn-start-recruit').onclick = () => {
         myRole = 'host';
-        // Round-4 #10: validate all platform coordinates before they hit the wire.
-        const bad = platforms.some(p => !isValidTowerCoord(p.x, p.y));
-        if (bad) { showNotification('ステージ座標が無効です'); return; }
-        socket.emit('create_room', { platforms: platforms }, (res) => {
-            // Server callback now returns { roomId, token } (round-4 #8).
-            if (res && res.error) { showNotification(res.error); return; }
-            if (res && res.token) rejoinToken = res.token;
-            myTowerCount = 0;
+        socket.emit('create_room', { platforms: platforms }, () => {
             showScreen('lobby');
         });
     };
@@ -983,10 +689,6 @@
     document.getElementById('btn-refresh-rooms').onclick = fetchRooms;
     document.getElementById('btn-cancel-rooms').onclick = () => showScreen('title');
     document.getElementById('btn-cancel-lobby').onclick = () => {
-        // Round-4 #8: drop the rejoin token first so the reconnect listener
-        // does not try to rejoin a room the player intentionally left.
-        rejoinToken = null;
-        lastGameRoomId = null;
         socket.disconnect(); // 部屋を消すために切断
         showScreen('title');
     };
